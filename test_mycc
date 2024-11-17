@@ -1,0 +1,3 @@
+#!/bin/bash
+
+../writing-a-c-compiler-tests/test_compiler ./target/debug/mycc "$@"
