@@ -17,6 +17,20 @@ struct Cli {
     codegen: bool,
 }
 
+impl Cli {
+    fn do_parse(self: &Self) -> bool {
+        !self.lex
+    }
+
+    fn do_codegen(self: &Self) -> bool {
+        !self.lex && !self.parse
+    }
+
+    fn do_emit(self: &Self) -> bool {
+        !self.lex && !self.parse && !self.codegen
+    }
+}
+
 #[derive(Debug)]
 struct Identifier<'a>(&'a str);
 #[derive(Debug)]
@@ -34,6 +48,9 @@ enum Token<'a> {
     OBrace,
     CBrace,
     Semicolon,
+    Minus,
+    DoubleMinus,
+    Tilde,
 }
 
 #[derive(Debug)]
@@ -58,7 +75,7 @@ fn lex(source: &String) -> Vec<Token> {
     let mut current = &source[..];
     current = current.trim_start();
     let re =
-        Regex::new("\\A(?:(?<int>int\\b)|(?<void>void\\b)|(?<return>return\\b)|(?<identifier>[a-zA-Z_]\\w*\\b)|(?<constant>[0-9]+\\b)|(?<oparen>\\()|(?<cparen>\\))|(?<obrace>\\{)|(?<cbrace>\\})|(?<semicolon>;))").unwrap();
+        Regex::new("\\A(?:(?<int>int\\b)|(?<void>void\\b)|(?<return>return\\b)|(?<identifier>[a-zA-Z_]\\w*\\b)|(?<constant>[0-9]+\\b)|(?<o_paren>\\()|(?<c_paren>\\))|(?<o_brace>\\{)|(?<c_brace>\\})|(?<semicolon>;)|(?<minus>-)|(?<double_minus>--)|(?<tilde>~))").unwrap();
     while current.len() != 0 {
         let ca = re.captures(current);
 
@@ -73,16 +90,22 @@ fn lex(source: &String) -> Vec<Token> {
                 (Token::Identifier(Identifier(m.as_str())), m.end())
             } else if let Some(m) = ca.name("constant") {
                 (Token::Constant(Constant(m.as_str())), m.end())
-            } else if let Some(m) = ca.name("oparen") {
+            } else if let Some(m) = ca.name("o_paren") {
                 (Token::OParen, m.end())
-            } else if let Some(m) = ca.name("cparen") {
+            } else if let Some(m) = ca.name("c_paren") {
                 (Token::CParen, m.end())
-            } else if let Some(m) = ca.name("obrace") {
+            } else if let Some(m) = ca.name("o_brace") {
                 (Token::OBrace, m.end())
-            } else if let Some(m) = ca.name("cbrace") {
+            } else if let Some(m) = ca.name("c_brace") {
                 (Token::CBrace, m.end())
             } else if let Some(m) = ca.name("semicolon") {
                 (Token::Semicolon, m.end())
+            } else if let Some(m) = ca.name("minus") {
+                (Token::Minus, m.end())
+            } else if let Some(m) = ca.name("double_minus") {
+                (Token::DoubleMinus, m.end())
+            } else if let Some(m) = ca.name("tilde") {
+                (Token::Tilde, m.end())
             } else {
                 panic!()
             };
@@ -310,7 +333,7 @@ fn write_asm_text(path: &PathBuf, text: Vec<&str>) {
 
 fn main() {
     let args = Cli::parse();
-    let source_path = PathBuf::from(args.path);
+    let source_path = PathBuf::from(&args.path);
 
     if let Ok(temp_dir) = tempdir() {
         let preprocessed_path = temp_dir.path().join(source_path.file_name().unwrap());
@@ -328,30 +351,43 @@ fn main() {
                 Ok(source) => {
                     let mut tokens = lex(&source);
                     dbg!(&tokens);
-                    tokens.reverse();
-                    let c_program = parse_program(&mut tokens);
-                    dbg!(&c_program);
-                    let asm_program = codegen_program(c_program);
-                    dbg!(&asm_program);
-                    let asm_text = emit_program(asm_program);
-                    dbg!(&asm_text);
 
-                    let asm_path = temp_dir
-                        .path()
-                        .join(source_path.file_stem().unwrap())
-                        .with_extension("s");
+                    if args.do_parse() {
+                        tokens.reverse();
+                        let c_program = parse_program(&mut tokens);
+                        dbg!(&c_program);
 
-                    write_asm_text(&asm_path, asm_text);
+                        if args.do_codegen() {
+                            let asm_program = codegen_program(c_program);
+                            dbg!(&asm_program);
 
-                    let exe_path = source_path
-                        .parent()
-                        .unwrap()
-                        .join(source_path.file_stem().unwrap());
+                            if args.do_emit() {
+                                let asm_text = emit_program(asm_program);
+                                dbg!(&asm_text);
 
-                    if !run_gcc([asm_path.to_str().unwrap(), "-o", exe_path.to_str().unwrap()])
-                        .success()
-                    {
-                        panic!("Assembly compilation failed")
+                                let asm_path = temp_dir
+                                    .path()
+                                    .join(source_path.file_stem().unwrap())
+                                    .with_extension("s");
+
+                                write_asm_text(&asm_path, asm_text);
+
+                                let exe_path = source_path
+                                    .parent()
+                                    .unwrap()
+                                    .join(source_path.file_stem().unwrap());
+
+                                if !run_gcc([
+                                    asm_path.to_str().unwrap(),
+                                    "-o",
+                                    exe_path.to_str().unwrap(),
+                                ])
+                                .success()
+                                {
+                                    panic!("Assembly compilation failed")
+                                }
+                            }
+                        }
                     }
                 }
                 Err(_) => panic!("Cannot read preprocessed source"),
