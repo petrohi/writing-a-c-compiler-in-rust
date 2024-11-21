@@ -54,8 +54,17 @@ enum Token<'a> {
 }
 
 #[derive(Debug)]
+enum UnaryOperator {
+    Negate,
+    Complement,
+}
+#[derive(Debug)]
 enum CExpression<'a> {
     Constant(Constant<'a>),
+    Unary {
+        unary_operator: UnaryOperator,
+        expression: Box<CExpression<'a>>,
+    },
 }
 #[derive(Debug)]
 enum CStatement<'a> {
@@ -123,8 +132,26 @@ fn lex(source: &String) -> Vec<Token> {
 }
 
 fn parse_expression<'a>(tokens: &mut Vec<Token<'a>>) -> CExpression<'a> {
-    if let Some(Token::Constant(constant)) = tokens.pop() {
+    let token = tokens.pop();
+    if let Some(Token::Constant(constant)) = token {
         CExpression::Constant(constant)
+    } else if let Some(Token::OParen) = token {
+        let expression = parse_expression(tokens);
+        if let Some(Token::CParen) = tokens.pop() {
+            expression
+        } else {
+            panic!("Expected )");
+        }
+    } else if let Some(Token::Minus) = token {
+        CExpression::Unary {
+            unary_operator: UnaryOperator::Negate,
+            expression: Box::new(parse_expression(tokens)),
+        }
+    } else if let Some(Token::Tilde) = token {
+        CExpression::Unary {
+            unary_operator: UnaryOperator::Complement,
+            expression: Box::new(parse_expression(tokens)),
+        }
     } else {
         panic!("Expected constant");
     }
@@ -221,15 +248,19 @@ struct AsmProgram<'a>(AsmFunction<'a>);
 fn codegen_statement(statement: CStatement) -> Vec<AsmInstruction> {
     let mut instructions = Vec::new();
     match statement {
-        CStatement::Return(CExpression::Constant(constant)) => {
-            instructions.extend([
+        CStatement::Return(expression) => match expression {
+            CExpression::Constant(constant) => instructions.extend([
                 AsmInstruction::Move {
                     src: AsmOperand::Imm(constant),
                     dst: AsmOperand::Register(AsmRegister::EAX),
                 },
                 AsmInstruction::Ret,
-            ]);
-        }
+            ]),
+            CExpression::Unary {
+                unary_operator: _unary_operator,
+                expression: _expression,
+            } => todo!(),
+        },
     }
 
     instructions
