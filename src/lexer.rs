@@ -17,6 +17,10 @@ pub enum Token<'a> {
     Minus,
     DoubleMinus,
     Tilde,
+    Plus,
+    Star,
+    Slash,
+    Percent,
 }
 
 pub fn lex(source: &String) -> Vec<Token> {
@@ -24,7 +28,7 @@ pub fn lex(source: &String) -> Vec<Token> {
     let mut current = &source[..];
     current = current.trim_start();
     let re =
-        Regex::new("\\A(?:(?<int>int\\b)|(?<void>void\\b)|(?<return>return\\b)|(?<identifier>[a-zA-Z_]\\w*\\b)|(?<constant>[0-9]+\\b)|(?<o_paren>\\()|(?<c_paren>\\))|(?<o_brace>\\{)|(?<c_brace>\\})|(?<semicolon>;)|(?<minus>-)|(?<double_minus>--)|(?<tilde>~))").unwrap();
+        Regex::new("\\A(?:(?<int>int\\b)|(?<void>void\\b)|(?<return>return\\b)|(?<identifier>[a-zA-Z_]\\w*\\b)|(?<constant>[0-9]+\\b)|(?<o_paren>\\()|(?<c_paren>\\))|(?<o_brace>\\{)|(?<c_brace>\\})|(?<semicolon>;)|(?<minus>-)|(?<double_minus>--)|(?<tilde>~)|(?<plus>\\+)|(?<star>\\*)|(?<slash>/)|(?<percent>%))").unwrap();
     while current.len() != 0 {
         let ca = re.captures(current);
 
@@ -55,6 +59,14 @@ pub fn lex(source: &String) -> Vec<Token> {
                 (Token::DoubleMinus, m.end())
             } else if let Some(m) = ca.name("tilde") {
                 (Token::Tilde, m.end())
+            } else if let Some(m) = ca.name("plus") {
+                (Token::Plus, m.end())
+            } else if let Some(m) = ca.name("star") {
+                (Token::Star, m.end())
+            } else if let Some(m) = ca.name("slash") {
+                (Token::Slash, m.end())
+            } else if let Some(m) = ca.name("percent") {
+                (Token::Percent, m.end())
             } else {
                 panic!()
             };
