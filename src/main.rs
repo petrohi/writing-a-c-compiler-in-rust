@@ -52,10 +52,13 @@ where
     }
 }
 
-fn write_asm_text(path: &PathBuf, text: Vec<&str>) {
+fn write_asm_fragments(path: &PathBuf, fragments: Vec<asm::Fragment>) {
     let mut file = File::create(path).unwrap();
-    for s in text {
-        file.write(s.as_bytes()).unwrap();
+    for fragment in fragments {
+        match fragment {
+            asm::Fragment::Str(s) => file.write(s.as_bytes()).unwrap(),
+            asm::Fragment::String(s) => file.write(s.as_bytes()).unwrap(),
+        };
     }
 }
 
@@ -94,17 +97,23 @@ fn main() {
                             if args.do_codegen() {
                                 let asm_program = asm::gen_program(tacky_program);
                                 dbg!(&asm_program);
+                                let asm_program =
+                                    asm::rewrite_program_to_eliminate_psedo(asm_program);
+                                dbg!(&asm_program);
+                                let asm_program =
+                                    asm::rewrite_program_to_fixup_instructions(asm_program);
+                                dbg!(&asm_program);
 
                                 if args.do_emit() {
-                                    let asm_text = asm::emit_program(asm_program);
-                                    dbg!(&asm_text);
+                                    let asm_fragments = asm::emit_program(asm_program);
+                                    dbg!(&asm_fragments);
 
                                     let asm_path = temp_dir
                                         .path()
                                         .join(source_path.file_stem().unwrap())
                                         .with_extension("s");
 
-                                    write_asm_text(&asm_path, asm_text);
+                                    write_asm_fragments(&asm_path, asm_fragments);
 
                                     let exe_path = source_path
                                         .parent()
