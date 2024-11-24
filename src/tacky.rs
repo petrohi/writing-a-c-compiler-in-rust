@@ -59,6 +59,11 @@ fn gen_val<'a>(
             });
             (dst, instructions)
         }
+        parser::Expression::Binary {
+            operator: _operator,
+            left: _left,
+            right: _right,
+        } => todo!(),
     }
 }
 
