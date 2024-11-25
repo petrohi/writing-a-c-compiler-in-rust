@@ -17,7 +17,7 @@ pub enum BinaryOperator {
     Sub,
     Mul,
     Div,
-    Mod,
+    Rem,
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ fn parse_binary(tokens: &mut Vec<Token>) -> BinaryOperator {
         Token::Minus => BinaryOperator::Sub,
         Token::Star => BinaryOperator::Mul,
         Token::Slash => BinaryOperator::Div,
-        Token::Percent => BinaryOperator::Mod,
+        Token::Percent => BinaryOperator::Rem,
         _ => panic!("Unexpected token"),
     }
 }

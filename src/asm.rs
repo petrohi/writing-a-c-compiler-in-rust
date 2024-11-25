@@ -70,6 +70,12 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                     Instruction::Unary { operator, dst },
                 ]);
             }
+            tacky::Instruction::Binary {
+                operator: _operator,
+                src1: _src1,
+                src2: _src2,
+                dst: _dst,
+            } => todo!(),
         }
     }
 

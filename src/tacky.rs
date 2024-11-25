@@ -13,6 +13,12 @@ pub enum Instruction<'a> {
         src: Val<'a>,
         dst: Val<'a>,
     },
+    Binary {
+        operator: parser::BinaryOperator,
+        src1: Val<'a>,
+        src2: Val<'a>,
+        dst: Val<'a>,
+    },
     Return(Val<'a>),
 }
 
@@ -40,9 +46,9 @@ impl Context {
     }
 }
 
-fn gen_val<'a>(
+fn gen_val<'a, 'b>(
     expression: parser::Expression<'a>,
-    context: &'a mut Context,
+    context: &'b mut Context,
 ) -> (Val<'a>, Vec<Instruction<'a>>) {
     match expression {
         parser::Expression::Constant(constant) => (Val::Constant(constant), Vec::new()),
@@ -60,10 +66,22 @@ fn gen_val<'a>(
             (dst, instructions)
         }
         parser::Expression::Binary {
-            operator: _operator,
-            left: _left,
-            right: _right,
-        } => todo!(),
+            operator,
+            left,
+            right,
+        } => {
+            let dst = context.next_tmp();
+            let (src1, mut src1_instructions) = gen_val(*left, context);
+            let (src2, src2_instructions) = gen_val(*right, context);
+            src1_instructions.extend(src2_instructions);
+            src1_instructions.push(Instruction::Binary {
+                operator,
+                src1,
+                src2,
+                dst: dst.clone(),
+            });
+            (dst, src1_instructions)
+        }
     }
 }
 
