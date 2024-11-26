@@ -11,7 +11,7 @@ pub enum UnaryOperator {
     Complement,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum BinaryOperator {
     Add,
     Sub,

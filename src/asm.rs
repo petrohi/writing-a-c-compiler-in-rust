@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 
-use crate::{
-    parser::{self, UnaryOperator},
-    tacky,
-};
+use crate::{parser, tacky};
 
 #[derive(Clone, Debug)]
 pub enum Register {
     Ax,
+    Dx,
     R10,
+    R11,
 }
 
 #[derive(Clone, Debug)]
@@ -25,11 +24,20 @@ pub enum Instruction<'a> {
         operator: parser::UnaryOperator,
         dst: Operand<'a>,
     },
+    Binary {
+        operator: parser::BinaryOperator,
+        src: Operand<'a>,
+        dst: Operand<'a>,
+    },
     Move {
         src: Operand<'a>,
         dst: Operand<'a>,
     },
+    Idiv {
+        operand: Operand<'a>,
+    },
     Ret,
+    Cdq,
 }
 
 #[derive(Debug)]
@@ -71,11 +79,56 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 ]);
             }
             tacky::Instruction::Binary {
-                operator: _operator,
-                src1: _src1,
-                src2: _src2,
-                dst: _dst,
-            } => todo!(),
+                operator,
+                src1,
+                src2,
+                dst,
+            } => {
+                if let parser::BinaryOperator::Div = operator {
+                    asm_instructions.extend([
+                        Instruction::Move {
+                            src: gen_operand(src1),
+                            dst: Operand::Register(Register::Ax),
+                        },
+                        Instruction::Cdq,
+                        Instruction::Idiv {
+                            operand: gen_operand(src2),
+                        },
+                        Instruction::Move {
+                            src: Operand::Register(Register::Ax),
+                            dst: gen_operand(dst),
+                        },
+                    ]);
+                } else if let parser::BinaryOperator::Rem = operator {
+                    asm_instructions.extend([
+                        Instruction::Move {
+                            src: gen_operand(src1),
+                            dst: Operand::Register(Register::Ax),
+                        },
+                        Instruction::Cdq,
+                        Instruction::Idiv {
+                            operand: gen_operand(src2),
+                        },
+                        Instruction::Move {
+                            src: Operand::Register(Register::Dx),
+                            dst: gen_operand(dst),
+                        },
+                    ]);
+                } else {
+                    let dst = gen_operand(dst);
+                    asm_instructions.extend([
+                        Instruction::Move {
+                            src: gen_operand(src1),
+                            dst: dst.clone(),
+                        },
+                        Instruction::Binary {
+                            operator,
+                            src: gen_operand(src2),
+                            dst: dst.clone(),
+                        },
+                    ]);
+                }
+            }
         }
     }
 
@@ -133,6 +186,14 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
                 src: rewrite_operand_to_eliminate_psedo(src, &mut stack),
                 dst: rewrite_operand_to_eliminate_psedo(dst, &mut stack),
             },
+            Instruction::Binary { src, dst, operator } => Instruction::Binary {
+                operator,
+                src: rewrite_operand_to_eliminate_psedo(src, &mut stack),
+                dst: rewrite_operand_to_eliminate_psedo(dst, &mut stack),
+            },
+            Instruction::Idiv { operand } => Instruction::Idiv {
+                operand: rewrite_operand_to_eliminate_psedo(operand, &mut stack),
+            },
             i => i,
         });
     }
@@ -173,6 +234,61 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
                 _ => rewritten_instructions.push(instruction),
             },
 
+            Instruction::Binary {
+                ref src,
+                ref dst,
+                ref operator,
+            } => {
+                if let parser::BinaryOperator::Mul = operator {
+                    match (src, dst) {
+                        (_, Operand::Stack(_)) => rewritten_instructions.extend([
+                            Instruction::Move {
+                                src: dst.clone(),
+                                dst: Operand::Register(Register::R11),
+                            },
+                            Instruction::Binary {
+                                operator: parser::BinaryOperator::Mul,
+                                src: src.clone(),
+                                dst: Operand::Register(Register::R11),
+                            },
+                            Instruction::Move {
+                                src: Operand::Register(Register::R11),
+                                dst: dst.clone(),
+                            },
+                        ]),
+                        _ => rewritten_instructions.push(instruction),
+                    }
+                } else {
+                    match (src, dst) {
+                        (Operand::Stack(_), Operand::Stack(_)) => rewritten_instructions.extend([
+                            Instruction::Move {
+                                src: src.clone(),
+                                dst: Operand::Register(Register::R10),
+                            },
+                            Instruction::Binary {
+                                operator: operator.clone(),
+                                src: Operand::Register(Register::R10),
+                                dst: dst.clone(),
+                            },
+                        ]),
+                        _ => rewritten_instructions.push(instruction),
+                    }
+                }
+            }
+
+            Instruction::Idiv { ref operand } => match operand {
+                Operand::Imm(_) => rewritten_instructions.extend([
+                    Instruction::Move {
+                        src: operand.clone(),
+                        dst: Operand::Register(Register::R10),
+                    },
+                    Instruction::Idiv {
+                        operand: Operand::Register(Register::R10),
+                    },
+                ]),
+                _ => rewritten_instructions.push(instruction),
+            },
+
             _ => rewritten_instructions.push(instruction),
         }
     }
@@ -198,7 +314,9 @@ pub enum Fragment<'a> {
 fn emit_register(register: Register) -> Fragment<'static> {
     match register {
         Register::Ax => Fragment::Str("%eax"),
+        Register::Dx => Fragment::Str("%edx"),
         Register::R10 => Fragment::Str("%r10d"),
+        Register::R11 => Fragment::Str("%r11d"),
     }
 }
 
@@ -220,8 +338,17 @@ fn emit_operand(operand: Operand) -> Vec<Fragment> {
 
 fn emit_unary_mnemonic(operator: parser::UnaryOperator) -> Fragment<'static> {
     match operator {
-        UnaryOperator::Negate => Fragment::Str("\tnegl "),
-        UnaryOperator::Complement => Fragment::Str("\tnotl "),
+        parser::UnaryOperator::Negate => Fragment::Str("\tnegl "),
+        parser::UnaryOperator::Complement => Fragment::Str("\tnotl "),
+    }
+}
+
+fn emit_binary_mnemonic(operator: parser::BinaryOperator) -> Fragment<'static> {
+    match operator {
+        parser::BinaryOperator::Add => Fragment::Str("\taddl "),
+        parser::BinaryOperator::Sub => Fragment::Str("\tsubl "),
+        parser::BinaryOperator::Mul => Fragment::Str("\timull "),
+        _ => panic!(),
     }
 }
 
@@ -246,6 +373,19 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
             text.extend(emit_operand(dst));
             text.push(Fragment::Str("\n"));
         }
+        Instruction::Binary { operator, src, dst } => {
+            text.push(emit_binary_mnemonic(operator));
+            text.extend(emit_operand(src));
+            text.push(Fragment::Str(", "));
+            text.extend(emit_operand(dst));
+            text.push(Fragment::Str("\n"));
+        }
+        Instruction::Idiv { operand } => {
+            text.push(Fragment::Str("\tidivl "));
+            text.extend(emit_operand(operand));
+            text.push(Fragment::Str("\n"));
+        }
+        Instruction::Cdq => text.push(Fragment::Str("\tcdq\n")),
     }
 
     text
