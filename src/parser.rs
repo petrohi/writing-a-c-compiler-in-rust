@@ -5,10 +5,11 @@ pub struct Identifier<'a>(pub &'a str);
 #[derive(Debug, Clone)]
 pub struct Constant<'a>(pub &'a str);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum UnaryOperator {
     Negate,
     Complement,
+    Not,
 }
 
 #[derive(Clone, Debug)]
@@ -18,6 +19,14 @@ pub enum BinaryOperator {
     Mul,
     Div,
     Rem,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    Equal,
+    NotEqual,
+    And,
+    Or,
 }
 
 #[derive(Debug)]
@@ -64,6 +73,7 @@ fn parse_unary(tokens: &mut Vec<Token>) -> UnaryOperator {
     match pop_token(tokens) {
         Token::Minus => UnaryOperator::Negate,
         Token::Tilde => UnaryOperator::Complement,
+        Token::Asterisk => UnaryOperator::Not,
         _ => panic!("Unexpected token"),
     }
 }
@@ -75,6 +85,14 @@ fn parse_binary(tokens: &mut Vec<Token>) -> BinaryOperator {
         Token::Star => BinaryOperator::Mul,
         Token::Slash => BinaryOperator::Div,
         Token::Percent => BinaryOperator::Rem,
+        Token::LessThan => BinaryOperator::LessThan,
+        Token::LessThanEqual => BinaryOperator::LessThanOrEqual,
+        Token::GreaterThan => BinaryOperator::GreaterThan,
+        Token::GreaterThanEqual => BinaryOperator::GreaterThanOrEqual,
+        Token::DoubleEqual => BinaryOperator::Equal,
+        Token::AsteriskEqual => BinaryOperator::NotEqual,
+        Token::DoubleAmpersand => BinaryOperator::And,
+        Token::DoublePipe => BinaryOperator::Or,
         _ => panic!("Unexpected token"),
     }
 }
@@ -100,7 +118,7 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>) -> Expression<'a> {
                 panic!()
             }
         }
-        Token::Minus | Token::Tilde => Expression::Unary {
+        Token::Minus | Token::Tilde | Token::Asterisk => Expression::Unary {
             operator: parse_unary(tokens),
             expression: Box::new(parse_factor(tokens)),
         },
@@ -108,34 +126,34 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>) -> Expression<'a> {
     }
 }
 
-fn is_binary(token: &Token) -> bool {
+fn precedence(token: &Token) -> Option<usize> {
     match token {
-        Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent => true,
-        _ => false,
-    }
-}
-
-fn precedence(token: &Token) -> usize {
-    match token {
-        Token::Plus | Token::Minus => 45,
-        Token::Star | Token::Slash | Token::Percent => 50,
-        _ => panic!(),
+        Token::Plus | Token::Minus => Some(45),
+        Token::Star | Token::Slash | Token::Percent => Some(50),
+        Token::LessThan | Token::LessThanEqual | Token::GreaterThan | Token::GreaterThanEqual => {
+            Some(35)
+        }
+        Token::DoubleEqual | Token::AsteriskEqual => Some(30),
+        Token::DoubleAmpersand => Some(10),
+        Token::DoublePipe => Some(5),
+        _ => None,
     }
 }
 
 fn parse_expression<'a>(tokens: &mut Vec<Token<'a>>, min_precedence: usize) -> Expression<'a> {
     let mut left = parse_factor(tokens);
     let mut next_token = peek_token(tokens);
-    while is_binary(next_token) && precedence(next_token) >= min_precedence {
-        let precedence = precedence(next_token);
+    let mut next_precedence = precedence(next_token);
+    while next_precedence.is_some() && next_precedence.unwrap() >= min_precedence {
         let operator = parse_binary(tokens);
-        let right = parse_expression(tokens, precedence + 1);
+        let right = parse_expression(tokens, next_precedence.unwrap() + 1);
         left = Expression::Binary {
             operator,
             left: Box::new(left),
             right: Box::new(right),
         };
         next_token = peek_token(tokens);
+        next_precedence = precedence(next_token);
     }
     left
 }

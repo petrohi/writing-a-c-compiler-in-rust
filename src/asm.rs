@@ -18,14 +18,27 @@ pub enum Operand<'a> {
     Stack(usize),
 }
 
+#[derive(Clone, Debug)]
+pub enum UnaryOperator {
+    Negate,
+    Complement,
+}
+
+#[derive(Clone, Debug)]
+pub enum BinaryOperator {
+    Add,
+    Sub,
+    Mul,
+}
+
 #[derive(Debug)]
 pub enum Instruction<'a> {
     Unary {
-        operator: parser::UnaryOperator,
+        operator: UnaryOperator,
         dst: Operand<'a>,
     },
     Binary {
-        operator: parser::BinaryOperator,
+        operator: BinaryOperator,
         src: Operand<'a>,
         dst: Operand<'a>,
     },
@@ -69,14 +82,26 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 Instruction::Ret,
             ]),
             tacky::Instruction::Unary { operator, src, dst } => {
-                let dst = gen_operand(dst);
-                asm_instructions.extend([
-                    Instruction::Move {
-                        src: gen_operand(src),
-                        dst: dst.clone(),
-                    },
-                    Instruction::Unary { operator, dst },
-                ]);
+                let unary_operator = match operator {
+                    tacky::UnaryOperator::Complement => Some(UnaryOperator::Complement),
+                    tacky::UnaryOperator::Negate => Some(UnaryOperator::Negate),
+                };
+
+                if let Some(unary_operator) = unary_operator {
+                    let dst = gen_operand(dst);
+                    asm_instructions.extend([
+                        Instruction::Move {
+                            src: gen_operand(src),
+                            dst: dst.clone(),
+                        },
+                        Instruction::Unary {
+                            operator: unary_operator,
+                            dst,
+                        },
+                    ]);
+                } else {
+                    unimplemented!()
+                }
             }
             tacky::Instruction::Binary {
                 operator,
@@ -84,7 +109,27 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 src2,
                 dst,
             } => {
-                if let parser::BinaryOperator::Div = operator {
+                let binary_operator = match operator {
+                    tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
+                    tacky::BinaryOperator::Sub => Some(BinaryOperator::Sub),
+                    tacky::BinaryOperator::Mul => Some(BinaryOperator::Mul),
+                    _ => None,
+                };
+
+                if let Some(binary_operator) = binary_operator {
+                    let dst = gen_operand(dst);
+                    asm_instructions.extend([
+                        Instruction::Move {
+                            src: gen_operand(src1),
+                            dst: dst.clone(),
+                        },
+                        Instruction::Binary {
+                            operator: binary_operator,
+                            src: gen_operand(src2),
+                            dst: dst.clone(),
+                        },
+                    ]);
+                } else if let tacky::BinaryOperator::Div = operator {
                     asm_instructions.extend([
                         Instruction::Move {
                             src: gen_operand(src1),
@@ -99,7 +144,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                             dst: gen_operand(dst),
                         },
                     ]);
-                } else if let parser::BinaryOperator::Rem = operator {
+                } else if let tacky::BinaryOperator::Rem = operator {
                     asm_instructions.extend([
                         Instruction::Move {
                             src: gen_operand(src1),
@@ -115,18 +160,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                         },
                     ]);
                 } else {
-                    let dst = gen_operand(dst);
-                    asm_instructions.extend([
-                        Instruction::Move {
-                            src: gen_operand(src1),
-                            dst: dst.clone(),
-                        },
-                        Instruction::Binary {
-                            operator,
-                            src: gen_operand(src2),
-                            dst: dst.clone(),
-                        },
-                    ]);
+                    unimplemented!()
                 }
             }
         }
@@ -239,7 +273,7 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
                 ref dst,
                 ref operator,
             } => {
-                if let parser::BinaryOperator::Mul = operator {
+                if let BinaryOperator::Mul = operator {
                     match (src, dst) {
                         (_, Operand::Stack(_)) => rewritten_instructions.extend([
                             Instruction::Move {
@@ -247,7 +281,7 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
                                 dst: Operand::Register(Register::R11),
                             },
                             Instruction::Binary {
-                                operator: parser::BinaryOperator::Mul,
+                                operator: BinaryOperator::Mul,
                                 src: src.clone(),
                                 dst: Operand::Register(Register::R11),
                             },
@@ -336,19 +370,18 @@ fn emit_operand(operand: Operand) -> Vec<Fragment> {
     text
 }
 
-fn emit_unary_mnemonic(operator: parser::UnaryOperator) -> Fragment<'static> {
+fn emit_unary_mnemonic(operator: UnaryOperator) -> Fragment<'static> {
     match operator {
-        parser::UnaryOperator::Negate => Fragment::Str("\tnegl "),
-        parser::UnaryOperator::Complement => Fragment::Str("\tnotl "),
+        UnaryOperator::Negate => Fragment::Str("\tnegl "),
+        UnaryOperator::Complement => Fragment::Str("\tnotl "),
     }
 }
 
-fn emit_binary_mnemonic(operator: parser::BinaryOperator) -> Fragment<'static> {
+fn emit_binary_mnemonic(operator: BinaryOperator) -> Fragment<'static> {
     match operator {
-        parser::BinaryOperator::Add => Fragment::Str("\taddl "),
-        parser::BinaryOperator::Sub => Fragment::Str("\tsubl "),
-        parser::BinaryOperator::Mul => Fragment::Str("\timull "),
-        _ => panic!(),
+        BinaryOperator::Add => Fragment::Str("\taddl "),
+        BinaryOperator::Sub => Fragment::Str("\tsubl "),
+        BinaryOperator::Mul => Fragment::Str("\timull "),
     }
 }
 

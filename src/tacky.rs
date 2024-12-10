@@ -6,15 +6,36 @@ pub enum Val<'a> {
     Tmp(usize),
 }
 
+#[derive(Clone, Debug)]
+pub enum UnaryOperator {
+    Negate,
+    Complement,
+}
+
+#[derive(Clone, Debug)]
+pub enum BinaryOperator {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    Equal,
+    NotEqual,
+}
+
 #[derive(Debug)]
 pub enum Instruction<'a> {
     Unary {
-        operator: parser::UnaryOperator,
+        operator: UnaryOperator,
         src: Val<'a>,
         dst: Val<'a>,
     },
     Binary {
-        operator: parser::BinaryOperator,
+        operator: BinaryOperator,
         src1: Val<'a>,
         src2: Val<'a>,
         dst: Val<'a>,
@@ -56,31 +77,62 @@ fn gen_val<'a, 'b>(
             operator,
             expression,
         } => {
-            let dst = context.next_tmp();
-            let (src, mut instructions) = gen_val(*expression, context);
-            instructions.push(Instruction::Unary {
-                operator,
-                src,
-                dst: dst.clone(),
-            });
-            (dst, instructions)
+            let unary_operator = match operator {
+                parser::UnaryOperator::Complement => Some(UnaryOperator::Complement),
+                parser::UnaryOperator::Negate => Some(UnaryOperator::Negate),
+                _ => None,
+            };
+
+            if let Some(unary_operator) = unary_operator {
+                let dst = context.next_tmp();
+                let (src, mut instructions) = gen_val(*expression, context);
+                instructions.push(Instruction::Unary {
+                    operator: unary_operator,
+                    src,
+                    dst: dst.clone(),
+                });
+                (dst, instructions)
+            } else {
+                unimplemented!()
+            }
         }
         parser::Expression::Binary {
             operator,
             left,
             right,
         } => {
-            let dst = context.next_tmp();
-            let (src1, mut src1_instructions) = gen_val(*left, context);
-            let (src2, src2_instructions) = gen_val(*right, context);
-            src1_instructions.extend(src2_instructions);
-            src1_instructions.push(Instruction::Binary {
-                operator,
-                src1,
-                src2,
-                dst: dst.clone(),
-            });
-            (dst, src1_instructions)
+            let binary_operator = match operator {
+                parser::BinaryOperator::Add => Some(BinaryOperator::Add),
+                parser::BinaryOperator::Sub => Some(BinaryOperator::Sub),
+                parser::BinaryOperator::Mul => Some(BinaryOperator::Mul),
+                parser::BinaryOperator::Div => Some(BinaryOperator::Div),
+                parser::BinaryOperator::Rem => Some(BinaryOperator::Rem),
+                parser::BinaryOperator::LessThan => Some(BinaryOperator::LessThan),
+                parser::BinaryOperator::LessThanOrEqual => Some(BinaryOperator::LessThanOrEqual),
+                parser::BinaryOperator::GreaterThan => Some(BinaryOperator::GreaterThan),
+                parser::BinaryOperator::GreaterThanOrEqual => {
+                    Some(BinaryOperator::GreaterThanOrEqual)
+                }
+                parser::BinaryOperator::Equal => Some(BinaryOperator::Equal),
+                parser::BinaryOperator::NotEqual => Some(BinaryOperator::NotEqual),
+                _ => None,
+            };
+
+            if let Some(binary_operator) = binary_operator {
+                let dst = context.next_tmp();
+                let (src1, mut src1_instructions) = gen_val(*left, context);
+                let (src2, src2_instructions) = gen_val(*right, context);
+                src1_instructions.extend(src2_instructions);
+                src1_instructions.push(Instruction::Binary {
+                    operator: binary_operator,
+                    src1,
+                    src2,
+                    dst: dst.clone(),
+                });
+                (dst, src1_instructions)
+            } else {
+                unimplemented!()
+            }
         }
     }
 }
