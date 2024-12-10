@@ -5,7 +5,7 @@ mod tacky;
 
 use clap::Parser;
 use std::fs::{read_to_string, File};
-use std::io::Write;
+use std::io::{stdout, Write};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 use tempfile::tempdir;
@@ -52,12 +52,11 @@ where
     }
 }
 
-fn write_asm_fragments(path: &PathBuf, fragments: Vec<asm::Fragment>) {
-    let mut file = File::create(path).unwrap();
+fn write_asm_fragments(w: &mut impl Write, fragments: &Vec<asm::Fragment>) {
     for fragment in fragments {
         match fragment {
-            asm::Fragment::Str(s) => file.write(s.as_bytes()).unwrap(),
-            asm::Fragment::String(s) => file.write(s.as_bytes()).unwrap(),
+            asm::Fragment::Str(s) => w.write(s.as_bytes()).unwrap(),
+            asm::Fragment::String(s) => w.write(s.as_bytes()).unwrap(),
         };
     }
 }
@@ -106,14 +105,17 @@ fn main() {
 
                                 if args.do_emit() {
                                     let asm_fragments = asm::emit_program(asm_program);
-                                    dbg!(&asm_fragments);
 
                                     let asm_path = temp_dir
                                         .path()
                                         .join(source_path.file_stem().unwrap())
                                         .with_extension("s");
 
-                                    write_asm_fragments(&asm_path, asm_fragments);
+                                    let asm_file = File::create(&asm_path).unwrap();
+                                    write_asm_fragments(&mut &asm_file, &asm_fragments);
+
+                                    let mut stdout = stdout().lock();
+                                    write_asm_fragments(&mut stdout, &asm_fragments);
 
                                     let exe_path = source_path
                                         .parent()

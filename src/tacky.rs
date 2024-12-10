@@ -7,7 +7,7 @@ pub enum Val<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Label(usize);
+pub struct Label(pub usize);
 
 #[derive(Clone, Debug)]
 pub enum UnaryOperator {

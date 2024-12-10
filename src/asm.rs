@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::{parser, tacky};
+use crate::{
+    parser::{self, Constant},
+    tacky,
+};
 
 #[derive(Clone, Debug)]
 pub enum Register {
@@ -31,6 +34,16 @@ pub enum BinaryOperator {
     Mul,
 }
 
+#[derive(Clone, Debug)]
+pub enum Condition {
+    E,
+    NE,
+    G,
+    GE,
+    L,
+    LE,
+}
+
 #[derive(Debug)]
 pub enum Instruction<'a> {
     Unary {
@@ -42,6 +55,10 @@ pub enum Instruction<'a> {
         src: Operand<'a>,
         dst: Operand<'a>,
     },
+    Cmp {
+        src1: Operand<'a>,
+        src2: Operand<'a>,
+    },
     Move {
         src: Operand<'a>,
         dst: Operand<'a>,
@@ -51,6 +68,18 @@ pub enum Instruction<'a> {
     },
     Ret,
     Cdq,
+    Jmp {
+        target: tacky::Label,
+    },
+    JmpCC {
+        condition: Condition,
+        target: tacky::Label,
+    },
+    SetCC {
+        condition: Condition,
+        operand: Operand<'a>,
+    },
+    Label(tacky::Label),
 }
 
 #[derive(Debug)]
@@ -82,26 +111,44 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 Instruction::Ret,
             ]),
             tacky::Instruction::Unary { operator, src, dst } => {
-                let unary_operator = match operator {
-                    tacky::UnaryOperator::Complement => Some(UnaryOperator::Complement),
-                    tacky::UnaryOperator::Negate => Some(UnaryOperator::Negate),
-                    _ => None,
-                };
-
-                if let Some(unary_operator) = unary_operator {
+                if let tacky::UnaryOperator::Not = operator {
                     let dst = gen_operand(dst);
                     asm_instructions.extend([
+                        Instruction::Cmp {
+                            src1: Operand::Imm(Constant("0")),
+                            src2: gen_operand(src),
+                        },
                         Instruction::Move {
-                            src: gen_operand(src),
+                            src: Operand::Imm(Constant("0")),
                             dst: dst.clone(),
                         },
-                        Instruction::Unary {
-                            operator: unary_operator,
-                            dst,
+                        Instruction::SetCC {
+                            condition: Condition::E,
+                            operand: dst,
                         },
                     ]);
                 } else {
-                    unimplemented!()
+                    let unary_operator = match operator {
+                        tacky::UnaryOperator::Complement => Some(UnaryOperator::Complement),
+                        tacky::UnaryOperator::Negate => Some(UnaryOperator::Negate),
+                        _ => None,
+                    };
+
+                    if let Some(unary_operator) = unary_operator {
+                        let dst = gen_operand(dst);
+                        asm_instructions.extend([
+                            Instruction::Move {
+                                src: gen_operand(src),
+                                dst: dst.clone(),
+                            },
+                            Instruction::Unary {
+                                operator: unary_operator,
+                                dst,
+                            },
+                        ]);
+                    } else {
+                        unimplemented!()
+                    }
                 }
             }
             tacky::Instruction::Binary {
@@ -110,27 +157,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 src2,
                 dst,
             } => {
-                let binary_operator = match operator {
-                    tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
-                    tacky::BinaryOperator::Sub => Some(BinaryOperator::Sub),
-                    tacky::BinaryOperator::Mul => Some(BinaryOperator::Mul),
-                    _ => None,
-                };
-
-                if let Some(binary_operator) = binary_operator {
-                    let dst = gen_operand(dst);
-                    asm_instructions.extend([
-                        Instruction::Move {
-                            src: gen_operand(src1),
-                            dst: dst.clone(),
-                        },
-                        Instruction::Binary {
-                            operator: binary_operator,
-                            src: gen_operand(src2),
-                            dst: dst.clone(),
-                        },
-                    ]);
-                } else if let tacky::BinaryOperator::Div = operator {
+                if let tacky::BinaryOperator::Div = operator {
                     asm_instructions.extend([
                         Instruction::Move {
                             src: gen_operand(src1),
@@ -161,10 +188,91 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                         },
                     ]);
                 } else {
-                    unimplemented!()
+                    let binary_operator = match operator {
+                        tacky::BinaryOperator::Add => Some(BinaryOperator::Add),
+                        tacky::BinaryOperator::Sub => Some(BinaryOperator::Sub),
+                        tacky::BinaryOperator::Mul => Some(BinaryOperator::Mul),
+                        _ => None,
+                    };
+
+                    if let Some(binary_operator) = binary_operator {
+                        let dst = gen_operand(dst);
+                        asm_instructions.extend([
+                            Instruction::Move {
+                                src: gen_operand(src1),
+                                dst: dst.clone(),
+                            },
+                            Instruction::Binary {
+                                operator: binary_operator,
+                                src: gen_operand(src2),
+                                dst: dst.clone(),
+                            },
+                        ])
+                    } else {
+                        let condition = match operator {
+                            tacky::BinaryOperator::LessThan => Some(Condition::L),
+                            tacky::BinaryOperator::LessThanOrEqual => Some(Condition::LE),
+                            tacky::BinaryOperator::GreaterThan => Some(Condition::G),
+                            tacky::BinaryOperator::GreaterThanOrEqual => Some(Condition::GE),
+                            tacky::BinaryOperator::Equal => Some(Condition::E),
+                            tacky::BinaryOperator::NotEqual => Some(Condition::NE),
+                            _ => None,
+                        };
+
+                        if let Some(condition) = condition {
+                            let dst = gen_operand(dst);
+                            asm_instructions.extend([
+                                Instruction::Cmp {
+                                    src1: gen_operand(src2),
+                                    src2: gen_operand(src1),
+                                },
+                                Instruction::Move {
+                                    src: Operand::Imm(Constant("0")),
+                                    dst: dst.clone(),
+                                },
+                                Instruction::SetCC {
+                                    condition,
+                                    operand: dst,
+                                },
+                            ]);
+                        } else {
+                            unimplemented!()
+                        }
+                    }
                 }
             }
-            _ => unimplemented!(),
+            tacky::Instruction::Copy { src, dst } => asm_instructions.push(Instruction::Move {
+                src: gen_operand(src),
+                dst: gen_operand(dst),
+            }),
+            tacky::Instruction::Jump { target } => {
+                asm_instructions.push(Instruction::Jmp { target })
+            }
+            tacky::Instruction::JumpIfZero { condition, target } => {
+                asm_instructions.extend([
+                    Instruction::Cmp {
+                        src1: Operand::Imm(Constant("0")),
+                        src2: gen_operand(condition),
+                    },
+                    Instruction::JmpCC {
+                        condition: Condition::E,
+                        target,
+                    },
+                ]);
+            }
+            tacky::Instruction::JumpIfNotZero { condition, target } => {
+                asm_instructions.extend([
+                    Instruction::Cmp {
+                        src1: Operand::Imm(Constant("0")),
+                        src2: gen_operand(condition),
+                    },
+                    Instruction::JmpCC {
+                        condition: Condition::NE,
+                        target,
+                    },
+                ]);
+            }
+            tacky::Instruction::Label(label) => asm_instructions.push(Instruction::Label(label)),
         }
     }
 
@@ -227,7 +335,15 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
                 src: rewrite_operand_to_eliminate_psedo(src, &mut stack),
                 dst: rewrite_operand_to_eliminate_psedo(dst, &mut stack),
             },
+            Instruction::Cmp { src1, src2 } => Instruction::Cmp {
+                src1: rewrite_operand_to_eliminate_psedo(src1, &mut stack),
+                src2: rewrite_operand_to_eliminate_psedo(src2, &mut stack),
+            },
             Instruction::Idiv { operand } => Instruction::Idiv {
+                operand: rewrite_operand_to_eliminate_psedo(operand, &mut stack),
+            },
+            Instruction::SetCC { condition, operand } => Instruction::SetCC {
+                condition,
                 operand: rewrite_operand_to_eliminate_psedo(operand, &mut stack),
             },
             i => i,
@@ -312,6 +428,30 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
                 }
             }
 
+            Instruction::Cmp { ref src1, ref src2 } => match (src1, src2) {
+                (Operand::Stack(_), Operand::Stack(_)) => rewritten_instructions.extend([
+                    Instruction::Move {
+                        src: src1.clone(),
+                        dst: Operand::Register(Register::R10),
+                    },
+                    Instruction::Cmp {
+                        src1: Operand::Register(Register::R10),
+                        src2: src2.clone(),
+                    },
+                ]),
+                (_, Operand::Imm(_)) => rewritten_instructions.extend([
+                    Instruction::Move {
+                        src: src2.clone(),
+                        dst: Operand::Register(Register::R11),
+                    },
+                    Instruction::Cmp {
+                        src1: src1.clone(),
+                        src2: Operand::Register(Register::R11),
+                    },
+                ]),
+                _ => rewritten_instructions.push(instruction),
+            },
+
             Instruction::Idiv { ref operand } => match operand {
                 Operand::Imm(_) => rewritten_instructions.extend([
                     Instruction::Move {
@@ -372,6 +512,21 @@ fn emit_operand(operand: Operand) -> Vec<Fragment> {
     text
 }
 
+fn emit_label(label: tacky::Label) -> Fragment<'static> {
+    Fragment::String(format!(".L{}", label.0))
+}
+
+fn emit_condition(condition: Condition) -> Fragment<'static> {
+    match condition {
+        Condition::E => Fragment::Str("e"),
+        Condition::NE => Fragment::Str("ne"),
+        Condition::G => Fragment::Str("g"),
+        Condition::GE => Fragment::Str("ge"),
+        Condition::L => Fragment::Str("l"),
+        Condition::LE => Fragment::Str("le"),
+    }
+}
+
 fn emit_unary_mnemonic(operator: UnaryOperator) -> Fragment<'static> {
     match operator {
         UnaryOperator::Negate => Fragment::Str("\tnegl "),
@@ -415,12 +570,42 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
             text.extend(emit_operand(dst));
             text.push(Fragment::Str("\n"));
         }
+        Instruction::Cmp { src1, src2 } => {
+            text.push(Fragment::Str("\tcmpl "));
+            text.extend(emit_operand(src1));
+            text.push(Fragment::Str(", "));
+            text.extend(emit_operand(src2));
+            text.push(Fragment::Str("\n"));
+        }
         Instruction::Idiv { operand } => {
             text.push(Fragment::Str("\tidivl "));
             text.extend(emit_operand(operand));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Cdq => text.push(Fragment::Str("\tcdq\n")),
+        Instruction::Jmp { target } => {
+            text.push(Fragment::Str("\tjmp "));
+            text.push(emit_label(target));
+            text.push(Fragment::Str("\n"));
+        }
+        Instruction::JmpCC { condition, target } => {
+            text.push(Fragment::Str("\tj"));
+            text.push(emit_condition(condition));
+            text.push(Fragment::Str(" "));
+            text.push(emit_label(target));
+            text.push(Fragment::Str("\n"));
+        }
+        Instruction::SetCC { condition, operand } => {
+            text.push(Fragment::Str("\tset"));
+            text.push(emit_condition(condition));
+            text.push(Fragment::Str(" "));
+            text.extend(emit_operand(operand));
+            text.push(Fragment::Str("\n"));
+        }
+        Instruction::Label(label) => {
+            text.push(emit_label(label));
+            text.push(Fragment::Str(":\n"));
+        }
     }
 
     text
