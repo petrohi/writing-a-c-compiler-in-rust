@@ -1,4 +1,4 @@
-use crate::parser;
+use crate::parser::{self, Constant};
 
 #[derive(Debug, Clone)]
 pub enum Val<'a> {
@@ -6,10 +6,14 @@ pub enum Val<'a> {
     Tmp(usize),
 }
 
+#[derive(Debug, Clone)]
+pub struct Label(usize);
+
 #[derive(Clone, Debug)]
 pub enum UnaryOperator {
     Negate,
     Complement,
+    Not,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +45,22 @@ pub enum Instruction<'a> {
         dst: Val<'a>,
     },
     Return(Val<'a>),
+    Copy {
+        src: Val<'a>,
+        dst: Val<'a>,
+    },
+    Jump {
+        target: Label,
+    },
+    JumpIfZero {
+        condition: Val<'a>,
+        target: Label,
+    },
+    JumpIfNotZero {
+        condition: Val<'a>,
+        target: Label,
+    },
+    Label(Label),
 }
 
 #[derive(Debug)]
@@ -53,17 +73,27 @@ pub struct Program<'a>(pub Function<'a>);
 
 pub struct Context {
     last_tmp_index: usize,
+    last_label_index: usize,
 }
 
 impl Context {
     pub fn new() -> Context {
-        Context { last_tmp_index: 0 }
+        Context {
+            last_tmp_index: 0,
+            last_label_index: 0,
+        }
     }
 
     pub fn next_tmp<'a, 'b>(self: &'a mut Self) -> Val<'b> {
         let tmp = Val::Tmp(self.last_tmp_index);
         self.last_tmp_index += 1;
         tmp
+    }
+
+    pub fn next_label(self: &mut Self) -> Label {
+        let label = Label(self.last_label_index);
+        self.last_label_index += 1;
+        label
     }
 }
 
@@ -80,7 +110,7 @@ fn gen_val<'a, 'b>(
             let unary_operator = match operator {
                 parser::UnaryOperator::Complement => Some(UnaryOperator::Complement),
                 parser::UnaryOperator::Negate => Some(UnaryOperator::Negate),
-                _ => None,
+                parser::UnaryOperator::Not => Some(UnaryOperator::Not),
             };
 
             if let Some(unary_operator) = unary_operator {
@@ -129,6 +159,92 @@ fn gen_val<'a, 'b>(
                     src2,
                     dst: dst.clone(),
                 });
+                (dst, src1_instructions)
+            } else if let parser::BinaryOperator::And = operator {
+                let dst = context.next_tmp();
+                let test1 = context.next_tmp();
+                let test2 = context.next_tmp();
+
+                let is_false = context.next_label();
+                let end = context.next_label();
+
+                let (src1, mut src1_instructions) = gen_val(*left, context);
+                let (src2, src2_instructions) = gen_val(*right, context);
+
+                src1_instructions.push(Instruction::Copy {
+                    src: src1,
+                    dst: test1.clone(),
+                });
+                src1_instructions.push(Instruction::JumpIfZero {
+                    condition: test1,
+                    target: is_false.clone(),
+                });
+                src1_instructions.extend(src2_instructions);
+                src1_instructions.push(Instruction::Copy {
+                    src: src2,
+                    dst: test2.clone(),
+                });
+                src1_instructions.push(Instruction::JumpIfZero {
+                    condition: test2,
+                    target: is_false.clone(),
+                });
+                src1_instructions.push(Instruction::Copy {
+                    src: Val::Constant(Constant("1")),
+                    dst: dst.clone(),
+                });
+                src1_instructions.push(Instruction::Jump {
+                    target: end.clone(),
+                });
+                src1_instructions.push(Instruction::Label(is_false));
+                src1_instructions.push(Instruction::Copy {
+                    src: Val::Constant(Constant("0")),
+                    dst: dst.clone(),
+                });
+                src1_instructions.push(Instruction::Label(end));
+
+                (dst, src1_instructions)
+            } else if let parser::BinaryOperator::Or = operator {
+                let dst = context.next_tmp();
+                let test1 = context.next_tmp();
+                let test2 = context.next_tmp();
+
+                let is_true = context.next_label();
+                let end = context.next_label();
+
+                let (src1, mut src1_instructions) = gen_val(*left, context);
+                let (src2, src2_instructions) = gen_val(*right, context);
+
+                src1_instructions.push(Instruction::Copy {
+                    src: src1,
+                    dst: test1.clone(),
+                });
+                src1_instructions.push(Instruction::JumpIfNotZero {
+                    condition: test1,
+                    target: is_true.clone(),
+                });
+                src1_instructions.extend(src2_instructions);
+                src1_instructions.push(Instruction::Copy {
+                    src: src2,
+                    dst: test2.clone(),
+                });
+                src1_instructions.push(Instruction::JumpIfNotZero {
+                    condition: test2,
+                    target: is_true.clone(),
+                });
+                src1_instructions.push(Instruction::Copy {
+                    src: Val::Constant(Constant("0")),
+                    dst: dst.clone(),
+                });
+                src1_instructions.push(Instruction::Jump {
+                    target: end.clone(),
+                });
+                src1_instructions.push(Instruction::Label(is_true));
+                src1_instructions.push(Instruction::Copy {
+                    src: Val::Constant(Constant("1")),
+                    dst: dst.clone(),
+                });
+                src1_instructions.push(Instruction::Label(end));
+
                 (dst, src1_instructions)
             } else {
                 unimplemented!()

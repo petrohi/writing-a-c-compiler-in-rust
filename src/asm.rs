@@ -85,6 +85,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 let unary_operator = match operator {
                     tacky::UnaryOperator::Complement => Some(UnaryOperator::Complement),
                     tacky::UnaryOperator::Negate => Some(UnaryOperator::Negate),
+                    _ => None,
                 };
 
                 if let Some(unary_operator) = unary_operator {
@@ -163,6 +164,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                     unimplemented!()
                 }
             }
+            _ => unimplemented!(),
         }
     }
 
