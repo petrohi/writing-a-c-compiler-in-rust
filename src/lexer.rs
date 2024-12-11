@@ -14,8 +14,8 @@ pub enum Token<'a> {
     OBrace,
     CBrace,
     Semicolon,
-    Minus,
     DoubleMinus,
+    Minus,
     Tilde,
     Plus,
     Star,
@@ -26,6 +26,7 @@ pub enum Token<'a> {
     GreaterThanEqual,
     GreaterThan,
     DoubleEqual,
+    Equal,
     AsteriskEqual,
     Asterisk,
     DoubleAmpersand,
@@ -47,6 +48,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Int,
         },
     ));
+
     regex_tokenizers.push((
         "void",
         RegexTokenizer {
@@ -54,6 +56,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Void,
         },
     ));
+
     regex_tokenizers.push((
         "return",
         RegexTokenizer {
@@ -61,6 +64,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Return,
         },
     ));
+
     regex_tokenizers.push((
         "identifier",
         RegexTokenizer {
@@ -68,6 +72,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |m| Token::Identifier(parser::Identifier(m.as_str())),
         },
     ));
+
     regex_tokenizers.push((
         "constant",
         RegexTokenizer {
@@ -75,6 +80,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |m| Token::Constant(parser::Constant(m.as_str())),
         },
     ));
+
     regex_tokenizers.push((
         "o_paren",
         RegexTokenizer {
@@ -82,6 +88,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::OParen,
         },
     ));
+
     regex_tokenizers.push((
         "c_paren",
         RegexTokenizer {
@@ -89,6 +96,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::CParen,
         },
     ));
+
     regex_tokenizers.push((
         "o_brace",
         RegexTokenizer {
@@ -96,6 +104,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::OBrace,
         },
     ));
+
     regex_tokenizers.push((
         "c_brace",
         RegexTokenizer {
@@ -103,6 +112,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::CBrace,
         },
     ));
+
     regex_tokenizers.push((
         "semicolon",
         RegexTokenizer {
@@ -110,13 +120,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Semicolon,
         },
     ));
-    regex_tokenizers.push((
-        "minus",
-        RegexTokenizer {
-            regex: "(?<minus>-)",
-            match_to_token: |_| Token::Minus,
-        },
-    ));
+
     regex_tokenizers.push((
         "double_minus",
         RegexTokenizer {
@@ -124,6 +128,15 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::DoubleMinus,
         },
     ));
+
+    regex_tokenizers.push((
+        "minus",
+        RegexTokenizer {
+            regex: "(?<minus>-)",
+            match_to_token: |_| Token::Minus,
+        },
+    ));
+
     regex_tokenizers.push((
         "tilde",
         RegexTokenizer {
@@ -131,6 +144,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Tilde,
         },
     ));
+
     regex_tokenizers.push((
         "plus",
         RegexTokenizer {
@@ -138,6 +152,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Plus,
         },
     ));
+
     regex_tokenizers.push((
         "star",
         RegexTokenizer {
@@ -145,6 +160,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Star,
         },
     ));
+
     regex_tokenizers.push((
         "slash",
         RegexTokenizer {
@@ -152,6 +168,7 @@ pub fn lex(source: &String) -> Vec<Token> {
             match_to_token: |_| Token::Slash,
         },
     ));
+
     regex_tokenizers.push((
         "percent",
         RegexTokenizer {
@@ -197,6 +214,14 @@ pub fn lex(source: &String) -> Vec<Token> {
         RegexTokenizer {
             regex: "(?<double_equal>==)",
             match_to_token: |_| Token::DoubleEqual,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "equal",
+        RegexTokenizer {
+            regex: "(?<equal>=)",
+            match_to_token: |_| Token::Equal,
         },
     ));
 
