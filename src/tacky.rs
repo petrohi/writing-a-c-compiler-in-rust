@@ -250,12 +250,14 @@ fn gen_val<'a, 'b>(
                 unimplemented!()
             }
         }
+        parser::Expression::Var(identifier) => todo!(),
+        parser::Expression::Assignment { lvalue, rvalue } => todo!(),
     }
 }
 
-fn gen_statement<'a>(
+fn gen_statement<'a, 'b>(
     statement: parser::Statement<'a>,
-    context: &'a mut Context,
+    context: &'b mut Context,
 ) -> Vec<Instruction<'a>> {
     match statement {
         parser::Statement::Return(expression) => {
@@ -263,18 +265,28 @@ fn gen_statement<'a>(
             instructions.push(Instruction::Return(val));
             instructions
         }
+        parser::Statement::Expression(expression) => todo!(),
+        parser::Statement::Null => todo!(),
     }
 }
 
-fn gen_function<'a>(function: parser::Function<'a>, context: &'a mut Context) -> Function<'a> {
+fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context) -> Function<'a> {
     let parser::Function { body, name } = function;
-    Function {
-        name,
-        instructions: gen_statement(body, context),
+    let mut instructions = Vec::new();
+
+    for block_item in body {
+        match block_item {
+            parser::BlockItem::Statement(statement) => {
+                instructions.extend(gen_statement(statement, context))
+            }
+            parser::BlockItem::Declaration(declaration) => todo!(),
+        }
     }
+
+    Function { name, instructions }
 }
 
-pub fn gen_program<'a>(program: parser::Program<'a>, context: &'a mut Context) -> Program<'a> {
+pub fn gen_program<'a, 'b>(program: parser::Program<'a>, context: &'b mut Context) -> Program<'a> {
     let parser::Program(function) = program;
     Program(gen_function(function, context))
 }

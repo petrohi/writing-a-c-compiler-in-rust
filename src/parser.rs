@@ -30,8 +30,15 @@ pub enum BinaryOperator {
 }
 
 #[derive(Debug)]
+pub struct Declaration<'a> {
+    pub name: Identifier<'a>,
+    pub expression: Option<Expression<'a>>,
+}
+
+#[derive(Debug)]
 pub enum Expression<'a> {
     Constant(Constant<'a>),
+    Var(Identifier<'a>),
     Unary {
         operator: UnaryOperator,
         expression: Box<Expression<'a>>,
@@ -41,16 +48,28 @@ pub enum Expression<'a> {
         left: Box<Expression<'a>>,
         right: Box<Expression<'a>>,
     },
+    Assignment {
+        lvalue: Box<Expression<'a>>,
+        rvalue: Box<Expression<'a>>,
+    },
 }
 #[derive(Debug)]
 pub enum Statement<'a> {
     Return(Expression<'a>),
+    Expression(Expression<'a>),
+    Null,
+}
+
+#[derive(Debug)]
+pub enum BlockItem<'a> {
+    Statement(Statement<'a>),
+    Declaration(Declaration<'a>),
 }
 
 #[derive(Debug)]
 pub struct Function<'a> {
     pub name: Identifier<'a>,
-    pub body: Statement<'a>,
+    pub body: Vec<BlockItem<'a>>,
 }
 #[derive(Debug)]
 pub struct Program<'a>(pub Function<'a>);
@@ -106,6 +125,13 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>) -> Expression<'a> {
                 panic!()
             }
         }
+        Token::Identifier(_) => {
+            if let Token::Identifier(identifier) = pop_token(tokens) {
+                Expression::Var(identifier)
+            } else {
+                panic!()
+            }
+        }
         Token::OParen => {
             if let Token::OParen = pop_token(tokens) {
                 let expression = parse_expression(tokens, 0);
@@ -136,6 +162,7 @@ fn precedence(token: &Token) -> Option<usize> {
         Token::DoubleEqual | Token::AsteriskEqual => Some(30),
         Token::DoubleAmpersand => Some(10),
         Token::DoublePipe => Some(5),
+        Token::Equal => Some(1),
         _ => None,
     }
 }
@@ -145,13 +172,22 @@ fn parse_expression<'a>(tokens: &mut Vec<Token<'a>>, min_precedence: usize) -> E
     let mut next_token = peek_token(tokens);
     let mut next_precedence = precedence(next_token);
     while next_precedence.is_some() && next_precedence.unwrap() >= min_precedence {
-        let operator = parse_binary(tokens);
-        let right = parse_expression(tokens, next_precedence.unwrap() + 1);
-        left = Expression::Binary {
-            operator,
-            left: Box::new(left),
-            right: Box::new(right),
-        };
+        if let Token::Equal = next_token {
+            _ = pop_token(tokens);
+            let right = parse_expression(tokens, next_precedence.unwrap());
+            left = Expression::Assignment {
+                lvalue: Box::new(left),
+                rvalue: Box::new(right),
+            };
+        } else {
+            let operator = parse_binary(tokens);
+            let right = parse_expression(tokens, next_precedence.unwrap() + 1);
+            left = Expression::Binary {
+                operator,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
         next_token = peek_token(tokens);
         next_precedence = precedence(next_token);
     }
@@ -159,15 +195,61 @@ fn parse_expression<'a>(tokens: &mut Vec<Token<'a>>, min_precedence: usize) -> E
 }
 
 fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>) -> Statement<'a> {
-    if let Token::Return = pop_token(tokens) {
+    if let Token::Return = peek_token(tokens) {
+        _ = pop_token(tokens);
         let expression = parse_expression(tokens, 0);
         if let Token::Semicolon = pop_token(tokens) {
             Statement::Return(expression)
         } else {
             panic!("Expected ;");
         }
+    } else if let Token::Semicolon = peek_token(tokens) {
+        _ = pop_token(tokens);
+        Statement::Null
     } else {
-        panic!("Expected return");
+        let expression = parse_expression(tokens, 0);
+
+        if let Token::Semicolon = pop_token(tokens) {
+            Statement::Expression(expression)
+        } else {
+            panic!("Expected ;");
+        }
+    }
+}
+
+fn parse_declaration<'a>(tokens: &mut Vec<Token<'a>>) -> Declaration<'a> {
+    if let Token::Int = pop_token(tokens) {
+        if let Token::Identifier(identifier) = pop_token(tokens) {
+            let expression = match pop_token(tokens) {
+                Token::Equal => {
+                    let expression = parse_expression(tokens, 0);
+                    if let Token::Semicolon = pop_token(tokens) {
+                        Some(expression)
+                    } else {
+                        panic!("Expected ;");
+                    }
+                }
+                Token::Semicolon => None,
+                _ => panic!("Expected = or ;"),
+            };
+
+            Declaration {
+                name: identifier,
+                expression,
+            }
+        } else {
+            panic!("Expected <identifier>");
+        }
+    } else {
+        panic!("Expected int")
+    }
+}
+
+fn parse_block_item<'a>(tokens: &mut Vec<Token<'a>>) -> BlockItem<'a> {
+    if let Token::Int = peek_token(tokens) {
+        BlockItem::Declaration(parse_declaration(tokens))
+    } else {
+        BlockItem::Statement(parse_statement(tokens))
     }
 }
 
@@ -178,15 +260,19 @@ fn parse_function<'a>(tokens: &mut Vec<Token<'a>>) -> Function<'a> {
                 if let Token::Void = pop_token(tokens) {
                     if let Token::CParen = pop_token(tokens) {
                         if let Token::OBrace = pop_token(tokens) {
-                            let function = Function {
-                                body: parse_statement(tokens),
-                                name: identifier,
-                            };
+                            let mut block_items = Vec::new();
+                            loop {
+                                if let Token::CBrace = peek_token(tokens) {
+                                    _ = pop_token(tokens);
+                                    break;
+                                } else {
+                                    block_items.push(parse_block_item(tokens));
+                                }
+                            }
 
-                            if let Token::CBrace = pop_token(tokens) {
-                                function
-                            } else {
-                                panic!("Expected }}");
+                            Function {
+                                body: block_items,
+                                name: identifier,
                             }
                         } else {
                             panic!("Expected {{");
@@ -201,7 +287,7 @@ fn parse_function<'a>(tokens: &mut Vec<Token<'a>>) -> Function<'a> {
                 panic!("Expected (");
             }
         } else {
-            panic!("Expected identifier");
+            panic!("Expected <identifier>");
         }
     } else {
         panic!("Expected int");
