@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::lexer::Token;
 
 #[derive(Debug, Clone)]
@@ -29,16 +31,27 @@ pub enum BinaryOperator {
     Or,
 }
 
+pub struct Context<'a> {
+    vars: HashMap<&'a str, usize>,
+}
+
+impl<'a> Context<'a> {
+    pub fn new() -> Context<'a> {
+        Context {
+            vars: HashMap::new(),
+        }
+    }
+}
 #[derive(Debug)]
 pub struct Declaration<'a> {
-    pub name: Identifier<'a>,
+    pub var: usize,
     pub expression: Option<Expression<'a>>,
 }
 
 #[derive(Debug)]
 pub enum Expression<'a> {
     Constant(Constant<'a>),
-    Var(Identifier<'a>),
+    Var(usize),
     Unary {
         operator: UnaryOperator,
         expression: Box<Expression<'a>>,
@@ -116,7 +129,7 @@ fn parse_binary(tokens: &mut Vec<Token>) -> BinaryOperator {
     }
 }
 
-fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>) -> Expression<'a> {
+fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> Expression<'a> {
     match peek_token(tokens) {
         Token::Constant(_) => {
             if let Token::Constant(constant) = pop_token(tokens) {
@@ -127,14 +140,18 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>) -> Expression<'a> {
         }
         Token::Identifier(_) => {
             if let Token::Identifier(identifier) = pop_token(tokens) {
-                Expression::Var(identifier)
+                if let Some(var) = context.vars.get(identifier.0) {
+                    Expression::Var(*var)
+                } else {
+                    panic!("Undeclared variable")
+                }
             } else {
                 panic!()
             }
         }
         Token::OParen => {
             if let Token::OParen = pop_token(tokens) {
-                let expression = parse_expression(tokens, 0);
+                let expression = parse_expression(tokens, 0, context);
                 if let Token::CParen = pop_token(tokens) {
                     expression
                 } else {
@@ -146,7 +163,7 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>) -> Expression<'a> {
         }
         Token::Minus | Token::Tilde | Token::Asterisk => Expression::Unary {
             operator: parse_unary(tokens),
-            expression: Box::new(parse_factor(tokens)),
+            expression: Box::new(parse_factor(tokens, context)),
         },
         _ => panic!("Unexpected token"),
     }
@@ -167,21 +184,30 @@ fn precedence(token: &Token) -> Option<usize> {
     }
 }
 
-fn parse_expression<'a>(tokens: &mut Vec<Token<'a>>, min_precedence: usize) -> Expression<'a> {
-    let mut left = parse_factor(tokens);
+fn parse_expression<'a>(
+    tokens: &mut Vec<Token<'a>>,
+    min_precedence: usize,
+    context: &mut Context<'a>,
+) -> Expression<'a> {
+    let mut left = parse_factor(tokens, context);
     let mut next_token = peek_token(tokens);
     let mut next_precedence = precedence(next_token);
     while next_precedence.is_some() && next_precedence.unwrap() >= min_precedence {
         if let Token::Equal = next_token {
             _ = pop_token(tokens);
-            let right = parse_expression(tokens, next_precedence.unwrap());
-            left = Expression::Assignment {
-                lvalue: Box::new(left),
-                rvalue: Box::new(right),
-            };
+            let right = parse_expression(tokens, next_precedence.unwrap(), context);
+
+            if let Expression::Var(_) = left {
+                left = Expression::Assignment {
+                    lvalue: Box::new(left),
+                    rvalue: Box::new(right),
+                };
+            } else {
+                panic!("Invalid lvalue in assignment")
+            }
         } else {
             let operator = parse_binary(tokens);
-            let right = parse_expression(tokens, next_precedence.unwrap() + 1);
+            let right = parse_expression(tokens, next_precedence.unwrap() + 1, context);
             left = Expression::Binary {
                 operator,
                 left: Box::new(left),
@@ -194,10 +220,10 @@ fn parse_expression<'a>(tokens: &mut Vec<Token<'a>>, min_precedence: usize) -> E
     left
 }
 
-fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>) -> Statement<'a> {
+fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> Statement<'a> {
     if let Token::Return = peek_token(tokens) {
         _ = pop_token(tokens);
-        let expression = parse_expression(tokens, 0);
+        let expression = parse_expression(tokens, 0, context);
         if let Token::Semicolon = pop_token(tokens) {
             Statement::Return(expression)
         } else {
@@ -207,7 +233,7 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>) -> Statement<'a> {
         _ = pop_token(tokens);
         Statement::Null
     } else {
-        let expression = parse_expression(tokens, 0);
+        let expression = parse_expression(tokens, 0, context);
 
         if let Token::Semicolon = pop_token(tokens) {
             Statement::Expression(expression)
@@ -217,12 +243,22 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>) -> Statement<'a> {
     }
 }
 
-fn parse_declaration<'a>(tokens: &mut Vec<Token<'a>>) -> Declaration<'a> {
+fn parse_declaration<'a>(
+    tokens: &mut Vec<Token<'a>>,
+    context: &mut Context<'a>,
+) -> Declaration<'a> {
     if let Token::Int = pop_token(tokens) {
         if let Token::Identifier(identifier) = pop_token(tokens) {
+            if context.vars.contains_key(identifier.0) {
+                panic!("Variable is already declared");
+            }
+
+            let var = context.vars.len();
+            context.vars.insert(identifier.0, var);
+
             let expression = match pop_token(tokens) {
                 Token::Equal => {
-                    let expression = parse_expression(tokens, 0);
+                    let expression = parse_expression(tokens, 0, context);
                     if let Token::Semicolon = pop_token(tokens) {
                         Some(expression)
                     } else {
@@ -233,10 +269,7 @@ fn parse_declaration<'a>(tokens: &mut Vec<Token<'a>>) -> Declaration<'a> {
                 _ => panic!("Expected = or ;"),
             };
 
-            Declaration {
-                name: identifier,
-                expression,
-            }
+            Declaration { var, expression }
         } else {
             panic!("Expected <identifier>");
         }
@@ -245,15 +278,15 @@ fn parse_declaration<'a>(tokens: &mut Vec<Token<'a>>) -> Declaration<'a> {
     }
 }
 
-fn parse_block_item<'a>(tokens: &mut Vec<Token<'a>>) -> BlockItem<'a> {
+fn parse_block_item<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> BlockItem<'a> {
     if let Token::Int = peek_token(tokens) {
-        BlockItem::Declaration(parse_declaration(tokens))
+        BlockItem::Declaration(parse_declaration(tokens, context))
     } else {
-        BlockItem::Statement(parse_statement(tokens))
+        BlockItem::Statement(parse_statement(tokens, context))
     }
 }
 
-fn parse_function<'a>(tokens: &mut Vec<Token<'a>>) -> Function<'a> {
+fn parse_function<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> Function<'a> {
     if let Token::Int = pop_token(tokens) {
         if let Token::Identifier(identifier) = pop_token(tokens) {
             if let Token::OParen = pop_token(tokens) {
@@ -266,7 +299,7 @@ fn parse_function<'a>(tokens: &mut Vec<Token<'a>>) -> Function<'a> {
                                     _ = pop_token(tokens);
                                     break;
                                 } else {
-                                    block_items.push(parse_block_item(tokens));
+                                    block_items.push(parse_block_item(tokens, context));
                                 }
                             }
 
@@ -294,8 +327,8 @@ fn parse_function<'a>(tokens: &mut Vec<Token<'a>>) -> Function<'a> {
     }
 }
 
-pub fn parse_program<'a>(tokens: &mut Vec<Token<'a>>) -> Program<'a> {
-    let program = Program(parse_function(tokens));
+pub fn parse_program<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> Program<'a> {
+    let program = Program(parse_function(tokens, context));
 
     if tokens.is_empty() {
         program

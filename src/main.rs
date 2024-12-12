@@ -18,6 +18,8 @@ struct Cli {
     #[clap(long, action)]
     parse: bool,
     #[clap(long, action)]
+    validate: bool,
+    #[clap(long, action)]
     tacky: bool,
     #[clap(long, action)]
     codegen: bool,
@@ -29,15 +31,15 @@ impl Cli {
     }
 
     fn do_tacky(self: &Self) -> bool {
-        !self.lex && !self.parse
+        !self.lex && !self.parse && !self.validate
     }
 
     fn do_codegen(self: &Self) -> bool {
-        !self.lex && !self.parse && !self.tacky
+        !self.lex && !self.parse && !self.validate && !self.tacky
     }
 
     fn do_emit(self: &Self) -> bool {
-        !self.lex && !self.parse && !self.tacky && !self.codegen
+        !self.lex && !self.parse && !self.validate && !self.tacky && !self.codegen
     }
 }
 
@@ -84,7 +86,10 @@ fn main() {
 
                     if args.do_parse() {
                         tokens.reverse();
-                        let parsed_program = parser::parse_program(&mut tokens);
+                        let mut parser_context = parser::Context::new();
+
+                        let parsed_program =
+                            parser::parse_program(&mut tokens, &mut parser_context);
                         dbg!(&parsed_program);
 
                         if args.do_tacky() {
