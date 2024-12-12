@@ -30,6 +30,10 @@ impl Cli {
         !self.lex
     }
 
+    fn do_validate(self: &Self) -> bool {
+        !self.lex && !self.parse
+    }
+
     fn do_tacky(self: &Self) -> bool {
         !self.lex && !self.parse && !self.validate
     }
@@ -86,7 +90,7 @@ fn main() {
 
                     if args.do_parse() {
                         tokens.reverse();
-                        let mut parser_context = parser::Context::new();
+                        let mut parser_context = parser::Context::new(args.do_validate());
 
                         let parsed_program =
                             parser::parse_program(&mut tokens, &mut parser_context);

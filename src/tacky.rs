@@ -1,4 +1,6 @@
-use crate::parser::{self, Constant};
+use std::collections::HashMap;
+
+use crate::parser::{self, Constant, Declaration};
 
 #[derive(Debug, Clone)]
 pub enum Val<'a> {
@@ -74,6 +76,7 @@ pub struct Program<'a>(pub Function<'a>);
 pub struct Context {
     last_tmp_index: usize,
     last_label_index: usize,
+    var_to_tmp: HashMap<usize, usize>,
 }
 
 impl Context {
@@ -81,6 +84,7 @@ impl Context {
         Context {
             last_tmp_index: 0,
             last_label_index: 0,
+            var_to_tmp: HashMap::new(),
         }
     }
 
@@ -88,6 +92,17 @@ impl Context {
         let tmp = Val::Tmp(self.last_tmp_index);
         self.last_tmp_index += 1;
         tmp
+    }
+
+    pub fn var_tmp<'a, 'b>(self: &'a mut Self, var: usize) -> Val<'b> {
+        if let Some(tmp) = self.var_to_tmp.get(&var) {
+            Val::Tmp(*tmp)
+        } else {
+            let tmp = self.last_tmp_index;
+            self.var_to_tmp.insert(var, tmp);
+            self.last_tmp_index += 1;
+            Val::Tmp(tmp)
+        }
     }
 
     pub fn next_label(self: &mut Self) -> Label {
@@ -250,8 +265,20 @@ fn gen_val<'a, 'b>(
                 unimplemented!()
             }
         }
-        parser::Expression::Var(identifier) => todo!(),
-        parser::Expression::Assignment { lvalue, rvalue } => todo!(),
+        parser::Expression::Var(var) => {
+            let dst = context.var_tmp(var);
+            (dst, Vec::new())
+        }
+        parser::Expression::Assignment { lvalue, rvalue } => {
+            let (lvalue, mut lvalue_instructions) = gen_val(*lvalue, context);
+            let (rvalue, rvalue_instructions) = gen_val(*rvalue, context);
+            lvalue_instructions.extend(rvalue_instructions);
+            lvalue_instructions.push(Instruction::Copy {
+                src: rvalue,
+                dst: lvalue.clone(),
+            });
+            (lvalue, lvalue_instructions)
+        }
     }
 }
 
@@ -265,8 +292,27 @@ fn gen_statement<'a, 'b>(
             instructions.push(Instruction::Return(val));
             instructions
         }
-        parser::Statement::Expression(expression) => todo!(),
-        parser::Statement::Null => todo!(),
+        parser::Statement::Expression(expression) => {
+            let (_, instructions) = gen_val(expression, context);
+            instructions
+        }
+        parser::Statement::Null => Vec::new(),
+    }
+}
+
+fn gen_declaration<'a, 'b>(
+    declaration: parser::Declaration<'a>,
+    context: &'b mut Context,
+) -> Vec<Instruction<'a>> {
+    let Declaration { var, expression } = declaration;
+
+    if let Some(expression) = expression {
+        let (src, mut instructions) = gen_val(expression, context);
+        let dst = context.var_tmp(var);
+        instructions.push(Instruction::Copy { src, dst });
+        instructions
+    } else {
+        Vec::new()
     }
 }
 
@@ -277,11 +323,15 @@ fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context
     for block_item in body {
         match block_item {
             parser::BlockItem::Statement(statement) => {
-                instructions.extend(gen_statement(statement, context))
+                instructions.extend(gen_statement(statement, context));
             }
-            parser::BlockItem::Declaration(declaration) => todo!(),
+            parser::BlockItem::Declaration(declaration) => {
+                instructions.extend(gen_declaration(declaration, context));
+            }
         }
     }
+
+    instructions.push(Instruction::Return(Val::Constant(Constant("0"))));
 
     Function { name, instructions }
 }

@@ -32,13 +32,53 @@ pub enum BinaryOperator {
 }
 
 pub struct Context<'a> {
+    validate: bool,
     vars: HashMap<&'a str, usize>,
 }
 
 impl<'a> Context<'a> {
-    pub fn new() -> Context<'a> {
+    pub fn new(validate: bool) -> Context<'a> {
         Context {
+            validate,
             vars: HashMap::new(),
+        }
+    }
+
+    fn declare_var(self: &mut Self, identifier: &Identifier<'a>) -> usize {
+        if self.validate {
+            if self.vars.contains_key(identifier.0) {
+                panic!("Variable is already declared");
+            }
+
+            let var = self.vars.len();
+            self.vars.insert(identifier.0, var);
+            var
+        } else {
+            0
+        }
+    }
+
+    fn get_var(self: &Self, identifier: &Identifier<'a>) -> Expression<'a> {
+        if self.validate {
+            if let Some(var) = self.vars.get(identifier.0) {
+                Expression::Var(*var)
+            } else {
+                panic!("Undeclared variable")
+            }
+        } else {
+            Expression::Var(0)
+        }
+    }
+
+    fn is_valid_lvalue(self: &Self, lvalue: &Expression) -> bool {
+        if self.validate {
+            if let Expression::Var(_) = lvalue {
+                true
+            } else {
+                false
+            }
+        } else {
+            true
         }
     }
 }
@@ -140,11 +180,7 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> E
         }
         Token::Identifier(_) => {
             if let Token::Identifier(identifier) = pop_token(tokens) {
-                if let Some(var) = context.vars.get(identifier.0) {
-                    Expression::Var(*var)
-                } else {
-                    panic!("Undeclared variable")
-                }
+                context.get_var(&identifier)
             } else {
                 panic!()
             }
@@ -197,13 +233,13 @@ fn parse_expression<'a>(
             _ = pop_token(tokens);
             let right = parse_expression(tokens, next_precedence.unwrap(), context);
 
-            if let Expression::Var(_) = left {
+            if context.is_valid_lvalue(&left) {
                 left = Expression::Assignment {
                     lvalue: Box::new(left),
                     rvalue: Box::new(right),
                 };
             } else {
-                panic!("Invalid lvalue in assignment")
+                panic!("Invalid lvalue in assignment");
             }
         } else {
             let operator = parse_binary(tokens);
@@ -249,12 +285,7 @@ fn parse_declaration<'a>(
 ) -> Declaration<'a> {
     if let Token::Int = pop_token(tokens) {
         if let Token::Identifier(identifier) = pop_token(tokens) {
-            if context.vars.contains_key(identifier.0) {
-                panic!("Variable is already declared");
-            }
-
-            let var = context.vars.len();
-            context.vars.insert(identifier.0, var);
+            let var = context.declare_var(&identifier);
 
             let expression = match pop_token(tokens) {
                 Token::Equal => {
