@@ -367,7 +367,7 @@ fn gen_statement<'a, 'b>(
 
             condition_instructions
         }
-        parser::Statement::Block(block) => todo!(),
+        parser::Statement::Block(block) => gen_block(block, context),
     }
 }
 
@@ -387,11 +387,10 @@ fn gen_declaration<'a, 'b>(
     }
 }
 
-fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context) -> Function<'a> {
-    let parser::Function { body, name } = function;
+fn gen_block<'a, 'b>(block: parser::Block<'a>, context: &'b mut Context) -> Vec<Instruction<'a>> {
     let mut instructions = Vec::new();
 
-    for block_item in body.0 {
+    for block_item in block.0 {
         match block_item {
             parser::BlockItem::Statement(statement) => {
                 instructions.extend(gen_statement(statement, context));
@@ -402,6 +401,14 @@ fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context
         }
     }
 
+    instructions
+}
+
+fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context) -> Function<'a> {
+    let parser::Function { body, name } = function;
+
+    let mut instructions = Vec::new();
+    instructions.extend(gen_block(body, context));
     instructions.push(Instruction::Return(Val::Constant(Constant("0"))));
 
     Function { name, instructions }

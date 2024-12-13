@@ -33,25 +33,37 @@ pub enum BinaryOperator {
 
 pub struct Context<'a> {
     validate: bool,
-    vars: HashMap<&'a str, usize>,
+    last_var_index: usize,
+    scopes: Vec<HashMap<&'a str, usize>>,
 }
 
 impl<'a> Context<'a> {
     pub fn new(validate: bool) -> Context<'a> {
         Context {
             validate,
-            vars: HashMap::new(),
+            last_var_index: 0,
+            scopes: vec![HashMap::new()],
         }
+    }
+
+    fn push_scope(self: &mut Self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(self: &mut Self) {
+        self.scopes.pop();
     }
 
     fn declare_var(self: &mut Self, identifier: &Identifier<'a>) -> usize {
         if self.validate {
-            if self.vars.contains_key(identifier.0) {
+            let scope = self.scopes.last_mut().unwrap();
+            if scope.contains_key(identifier.0) {
                 panic!("Variable is already declared");
             }
 
-            let var = self.vars.len();
-            self.vars.insert(identifier.0, var);
+            let var = self.last_var_index;
+            self.last_var_index += 1;
+            scope.insert(identifier.0, var);
             var
         } else {
             0
@@ -60,7 +72,15 @@ impl<'a> Context<'a> {
 
     fn get_var(self: &Self, identifier: &Identifier<'a>) -> Expression<'a> {
         if self.validate {
-            if let Some(var) = self.vars.get(identifier.0) {
+            let mut var = None;
+            for scope in self.scopes.iter().rev() {
+                var = scope.get(identifier.0);
+                if var.is_some() {
+                    break;
+                }
+            }
+
+            if let Some(var) = var {
                 Expression::Var(*var)
             } else {
                 panic!("Undeclared variable")
@@ -327,6 +347,9 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
     } else if let Token::OBrace = peek_token(tokens) {
         _ = pop_token(tokens);
         let mut block_items = Vec::new();
+
+        context.push_scope();
+
         loop {
             if let Token::CBrace = peek_token(tokens) {
                 _ = pop_token(tokens);
@@ -335,6 +358,9 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
             let block_item = parse_block_item(tokens, context);
             block_items.push(block_item);
         }
+
+        context.pop_scope();
+
         Statement::Block(Block(block_items))
     } else {
         let expression = parse_expression(tokens, 0, context);
