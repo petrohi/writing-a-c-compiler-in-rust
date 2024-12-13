@@ -7,6 +7,8 @@ pub enum Token<'a> {
     Int,
     Void,
     Return,
+    If,
+    Else,
     Identifier(parser::Identifier<'a>),
     Constant(parser::Constant<'a>),
     OParen,
@@ -27,10 +29,12 @@ pub enum Token<'a> {
     GreaterThan,
     DoubleEqual,
     Equal,
-    AsteriskEqual,
-    Asterisk,
+    ExclamationEqual,
+    Exclamation,
     DoubleAmpersand,
     DoublePipe,
+    Question,
+    Colon,
 }
 
 struct RegexTokenizer<'a, 'b> {
@@ -62,6 +66,22 @@ pub fn lex(source: &String) -> Vec<Token> {
         RegexTokenizer {
             regex: "(?<return>return\\b)",
             match_to_token: |_| Token::Return,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "if",
+        RegexTokenizer {
+            regex: "(?<if>if\\b)",
+            match_to_token: |_| Token::If,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "else",
+        RegexTokenizer {
+            regex: "(?<else>else\\b)",
+            match_to_token: |_| Token::Else,
         },
     ));
 
@@ -226,18 +246,18 @@ pub fn lex(source: &String) -> Vec<Token> {
     ));
 
     regex_tokenizers.push((
-        "asterisk_equal",
+        "exclamation_equal",
         RegexTokenizer {
-            regex: "(?<asterisk_equal>!=)",
-            match_to_token: |_| Token::AsteriskEqual,
+            regex: "(?<exclamation_equal>!=)",
+            match_to_token: |_| Token::ExclamationEqual,
         },
     ));
 
     regex_tokenizers.push((
-        "asterisk",
+        "exclamation",
         RegexTokenizer {
-            regex: "(?<asterisk>!)",
-            match_to_token: |_| Token::Asterisk,
+            regex: "(?<exclamation>!)",
+            match_to_token: |_| Token::Exclamation,
         },
     ));
 
@@ -254,6 +274,22 @@ pub fn lex(source: &String) -> Vec<Token> {
         RegexTokenizer {
             regex: "(?<double_pipe>\\|\\|)",
             match_to_token: |_| Token::DoublePipe,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "question",
+        RegexTokenizer {
+            regex: "(?<question>\\?)",
+            match_to_token: |_| Token::Question,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "colon",
+        RegexTokenizer {
+            regex: "(?<colon>:)",
+            match_to_token: |_| Token::Colon,
         },
     ));
 

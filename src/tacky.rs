@@ -279,6 +279,7 @@ fn gen_val<'a, 'b>(
             });
             (lvalue, lvalue_instructions)
         }
+        parser::Expression::Conditional { condition, then, els } => todo!(),
     }
 }
 
@@ -297,6 +298,7 @@ fn gen_statement<'a, 'b>(
             instructions
         }
         parser::Statement::Null => Vec::new(),
+        parser::Statement::If { condition, then, els } => todo!(),
     }
 }
 

@@ -105,12 +105,22 @@ pub enum Expression<'a> {
         lvalue: Box<Expression<'a>>,
         rvalue: Box<Expression<'a>>,
     },
+    Conditional {
+        condition: Box<Expression<'a>>,
+        then: Box<Expression<'a>>,
+        els: Box<Expression<'a>>,
+    },
 }
 #[derive(Debug)]
 pub enum Statement<'a> {
     Return(Expression<'a>),
     Expression(Expression<'a>),
     Null,
+    If {
+        condition: Expression<'a>,
+        then: Box<Statement<'a>>,
+        els: Option<Box<Statement<'a>>>,
+    },
 }
 
 #[derive(Debug)]
@@ -145,7 +155,7 @@ fn parse_unary(tokens: &mut Vec<Token>) -> UnaryOperator {
     match pop_token(tokens) {
         Token::Minus => UnaryOperator::Negate,
         Token::Tilde => UnaryOperator::Complement,
-        Token::Asterisk => UnaryOperator::Not,
+        Token::Exclamation => UnaryOperator::Not,
         _ => panic!("Unexpected token"),
     }
 }
@@ -162,7 +172,7 @@ fn parse_binary(tokens: &mut Vec<Token>) -> BinaryOperator {
         Token::GreaterThan => BinaryOperator::GreaterThan,
         Token::GreaterThanEqual => BinaryOperator::GreaterThanOrEqual,
         Token::DoubleEqual => BinaryOperator::Equal,
-        Token::AsteriskEqual => BinaryOperator::NotEqual,
+        Token::ExclamationEqual => BinaryOperator::NotEqual,
         Token::DoubleAmpersand => BinaryOperator::And,
         Token::DoublePipe => BinaryOperator::Or,
         _ => panic!("Unexpected token"),
@@ -197,7 +207,7 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> E
                 panic!()
             }
         }
-        Token::Minus | Token::Tilde | Token::Asterisk => Expression::Unary {
+        Token::Minus | Token::Tilde | Token::Exclamation => Expression::Unary {
             operator: parse_unary(tokens),
             expression: Box::new(parse_factor(tokens, context)),
         },
@@ -212,9 +222,10 @@ fn precedence(token: &Token) -> Option<usize> {
         Token::LessThan | Token::LessThanEqual | Token::GreaterThan | Token::GreaterThanEqual => {
             Some(35)
         }
-        Token::DoubleEqual | Token::AsteriskEqual => Some(30),
+        Token::DoubleEqual | Token::ExclamationEqual => Some(30),
         Token::DoubleAmpersand => Some(10),
         Token::DoublePipe => Some(5),
+        Token::Question => Some(3),
         Token::Equal => Some(1),
         _ => None,
     }
@@ -241,6 +252,20 @@ fn parse_expression<'a>(
             } else {
                 panic!("Invalid lvalue in assignment");
             }
+        } else if let Token::Question = next_token {
+            _ = pop_token(tokens);
+            let then = parse_expression(tokens, 0, context);
+
+            if let Token::Colon = pop_token(tokens) {
+                let els = parse_expression(tokens, next_precedence.unwrap(), context);
+                left = Expression::Conditional {
+                    condition: Box::new(left),
+                    then: Box::new(then),
+                    els: Box::new(els),
+                };
+            } else {
+                panic!("Expected :");
+            }
         } else {
             let operator = parse_binary(tokens);
             let right = parse_expression(tokens, next_precedence.unwrap() + 1, context);
@@ -264,6 +289,33 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
             Statement::Return(expression)
         } else {
             panic!("Expected ;");
+        }
+    } else if let Token::If = peek_token(tokens) {
+        _ = pop_token(tokens);
+
+        if let Token::OParen = pop_token(tokens) {
+            let condition = parse_expression(tokens, 0, context);
+
+            if let Token::CParen = pop_token(tokens) {
+                let then = parse_statement(tokens, context);
+
+                let els = if let Token::Else = peek_token(tokens) {
+                    _ = pop_token(tokens);
+                    Some(Box::new(parse_statement(tokens, context)))
+                } else {
+                    None
+                };
+
+                Statement::If {
+                    condition,
+                    then: Box::new(then),
+                    els,
+                }
+            } else {
+                panic!("Expected )");
+            }
+        } else {
+            panic!("Expected (");
         }
     } else if let Token::Semicolon = peek_token(tokens) {
         _ = pop_token(tokens);
