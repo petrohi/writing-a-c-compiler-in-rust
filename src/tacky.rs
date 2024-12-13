@@ -88,13 +88,13 @@ impl Context {
         }
     }
 
-    pub fn next_tmp<'a, 'b>(self: &'a mut Self) -> Val<'b> {
+    fn next_tmp<'a, 'b>(self: &'a mut Self) -> Val<'b> {
         let tmp = Val::Tmp(self.last_tmp_index);
         self.last_tmp_index += 1;
         tmp
     }
 
-    pub fn var_tmp<'a, 'b>(self: &'a mut Self, var: usize) -> Val<'b> {
+    fn var_tmp<'a, 'b>(self: &'a mut Self, var: usize) -> Val<'b> {
         if let Some(tmp) = self.var_to_tmp.get(&var) {
             Val::Tmp(*tmp)
         } else {
@@ -105,7 +105,7 @@ impl Context {
         }
     }
 
-    pub fn next_label(self: &mut Self) -> Label {
+    fn next_label(self: &mut Self) -> Label {
         let label = Label(self.last_label_index);
         self.last_label_index += 1;
         label
@@ -279,7 +279,45 @@ fn gen_val<'a, 'b>(
             });
             (lvalue, lvalue_instructions)
         }
-        parser::Expression::Conditional { condition, then, els } => todo!(),
+        parser::Expression::Conditional {
+            condition,
+            then,
+            els,
+        } => {
+            let dst = context.next_tmp();
+            let (condition, mut condition_instructions) = gen_val(*condition, context);
+            let els_label = context.next_label();
+            let end = context.next_label();
+            condition_instructions.push(Instruction::JumpIfZero {
+                condition,
+                target: els_label.clone(),
+            });
+
+            let (then, then_instructions) = gen_val(*then, context);
+            condition_instructions.extend(then_instructions);
+            condition_instructions.extend([
+                Instruction::Copy {
+                    src: then,
+                    dst: dst.clone(),
+                },
+                Instruction::Jump {
+                    target: end.clone(),
+                },
+                Instruction::Label(els_label),
+            ]);
+
+            let (els, els_instructions) = gen_val(*els, context);
+            condition_instructions.extend(els_instructions);
+            condition_instructions.extend([
+                Instruction::Copy {
+                    src: els,
+                    dst: dst.clone(),
+                },
+                Instruction::Label(end),
+            ]);
+
+            (dst, condition_instructions)
+        }
     }
 }
 
@@ -298,7 +336,37 @@ fn gen_statement<'a, 'b>(
             instructions
         }
         parser::Statement::Null => Vec::new(),
-        parser::Statement::If { condition, then, els } => todo!(),
+        parser::Statement::If {
+            condition,
+            then,
+            els,
+        } => {
+            let (condition, mut condition_instructions) = gen_val(condition, context);
+            let els_or_end_label = context.next_label();
+            condition_instructions.push(Instruction::JumpIfZero {
+                condition,
+                target: els_or_end_label.clone(),
+            });
+
+            condition_instructions.extend(gen_statement(*then, context));
+
+            if let Some(els) = els {
+                let end = context.next_label();
+                condition_instructions.extend([
+                    Instruction::Jump {
+                        target: end.clone(),
+                    },
+                    Instruction::Label(els_or_end_label),
+                ]);
+
+                condition_instructions.extend(gen_statement(*els, context));
+                condition_instructions.push(Instruction::Label(end));
+            } else {
+                condition_instructions.push(Instruction::Label(els_or_end_label));
+            }
+
+            condition_instructions
+        }
     }
 }
 
