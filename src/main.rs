@@ -5,7 +5,7 @@ mod tacky;
 
 use clap::Parser;
 use std::fs::{read_to_string, File};
-use std::io::{stdout, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
 use tempfile::tempdir;
@@ -86,7 +86,7 @@ fn main() {
             match read_to_string(preprocessed_path) {
                 Ok(source) => {
                     let mut tokens = lexer::lex(&source);
-                    dbg!(&tokens);
+                    //dbg!(&tokens);
 
                     if args.do_parse() {
                         tokens.reverse();
@@ -94,23 +94,23 @@ fn main() {
 
                         let parsed_program =
                             parser::parse_program(&mut tokens, &mut parser_context);
-                        dbg!(&parsed_program);
+                        //dbg!(&parsed_program);
 
                         if args.do_tacky() {
                             let mut tacky_context = tacky::Context::new();
                             let tacky_program =
                                 tacky::gen_program(parsed_program, &mut tacky_context);
-                            dbg!(&tacky_program);
+                            //dbg!(&tacky_program);
 
                             if args.do_codegen() {
                                 let asm_program = asm::gen_program(tacky_program);
-                                dbg!(&asm_program);
+                                //dbg!(&asm_program);
                                 let asm_program =
                                     asm::rewrite_program_to_eliminate_psedo(asm_program);
-                                dbg!(&asm_program);
+                                //dbg!(&asm_program);
                                 let asm_program =
                                     asm::rewrite_program_to_fixup_instructions(asm_program);
-                                dbg!(&asm_program);
+                                //dbg!(&asm_program);
 
                                 if args.do_emit() {
                                     let asm_fragments = asm::emit_program(asm_program);
@@ -122,9 +122,6 @@ fn main() {
 
                                     let asm_file = File::create(&asm_path).unwrap();
                                     write_asm_fragments(&mut &asm_file, &asm_fragments);
-
-                                    let mut stdout = stdout().lock();
-                                    write_asm_fragments(&mut stdout, &asm_fragments);
 
                                     let exe_path = source_path
                                         .parent()

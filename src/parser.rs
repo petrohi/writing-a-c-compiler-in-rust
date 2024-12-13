@@ -131,6 +131,17 @@ pub enum Expression<'a> {
         els: Box<Expression<'a>>,
     },
 }
+
+#[derive(Debug)]
+pub struct LoopLabel(Option<usize>);
+
+#[derive(Debug)]
+pub enum ForInit<'a> {
+    InitDecl(Declaration<'a>),
+    InitExp(Expression<'a>),
+    Null,
+}
+
 #[derive(Debug)]
 pub enum Statement<'a> {
     Return(Expression<'a>),
@@ -142,6 +153,25 @@ pub enum Statement<'a> {
         els: Option<Box<Statement<'a>>>,
     },
     Block(Block<'a>),
+    Break(LoopLabel),
+    Continue(LoopLabel),
+    While {
+        condition: Expression<'a>,
+        body: Box<Statement<'a>>,
+        label: LoopLabel,
+    },
+    DoWhile {
+        body: Box<Statement<'a>>,
+        condition: Expression<'a>,
+        label: LoopLabel,
+    },
+    For {
+        for_init: ForInit<'a>,
+        condition: Option<Expression<'a>>,
+        post: Option<Expression<'a>>,
+        body: Box<Statement<'a>>,
+        label: LoopLabel,
+    },
 }
 
 #[derive(Debug)]
@@ -235,7 +265,10 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> E
             operator: parse_unary(tokens),
             expression: Box::new(parse_factor(tokens, context)),
         },
-        _ => panic!("Unexpected token"),
+        x => {
+            dbg!(x);
+            panic!("Unexpected token");
+        }
     }
 }
 
@@ -341,6 +374,123 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
         } else {
             panic!("Expected (");
         }
+    } else if let Token::Break = peek_token(tokens) {
+        _ = pop_token(tokens);
+        if let Token::Semicolon = pop_token(tokens) {
+            Statement::Break(LoopLabel(None))
+        } else {
+            panic!("Expected ;")
+        }
+    } else if let Token::Continue = peek_token(tokens) {
+        _ = pop_token(tokens);
+        if let Token::Semicolon = pop_token(tokens) {
+            Statement::Continue(LoopLabel(None))
+        } else {
+            panic!("Expected ;")
+        }
+    } else if let Token::While = peek_token(tokens) {
+        _ = pop_token(tokens);
+
+        if let Token::OParen = pop_token(tokens) {
+            let condition = parse_expression(tokens, 0, context);
+
+            if let Token::CParen = pop_token(tokens) {
+                let body = parse_statement(tokens, context);
+
+                Statement::While {
+                    condition,
+                    body: Box::new(body),
+                    label: LoopLabel(None),
+                }
+            } else {
+                panic!("Expected )");
+            }
+        } else {
+            panic!("Expected (");
+        }
+    } else if let Token::Do = peek_token(tokens) {
+        _ = pop_token(tokens);
+        let body = parse_statement(tokens, context);
+
+        if let Token::While = pop_token(tokens) {
+            if let Token::OParen = pop_token(tokens) {
+                let condition = parse_expression(tokens, 0, context);
+
+                if let Token::CParen = pop_token(tokens) {
+                    if let Token::Semicolon = pop_token(tokens) {
+                        Statement::DoWhile {
+                            body: Box::new(body),
+                            condition,
+                            label: LoopLabel(None),
+                        }
+                    } else {
+                        panic!("Expected ;");
+                    }
+                } else {
+                    panic!("Expected )");
+                }
+            } else {
+                panic!("Expected (");
+            }
+        } else {
+            panic!("Expected while");
+        }
+    } else if let Token::For = peek_token(tokens) {
+        _ = pop_token(tokens);
+
+        if let Token::OParen = pop_token(tokens) {
+            let for_init = if let Token::Semicolon = peek_token(tokens) {
+                _ = pop_token(tokens);
+                ForInit::Null
+            } else {
+                let declaration = maybe_parse_declaration(tokens, context);
+
+                if let Some(declaration) = declaration {
+                    ForInit::InitDecl(declaration)
+                } else {
+                    let expression = parse_expression(tokens, 0, context);
+                    if let Token::Semicolon = pop_token(tokens) {
+                        ForInit::InitExp(expression)
+                    } else {
+                        panic!("Expected ;");
+                    }
+                }
+            };
+
+            let condition = if let Token::Semicolon = peek_token(tokens) {
+                _ = pop_token(tokens);
+                None
+            } else {
+                let expression = parse_expression(tokens, 0, context);
+                if let Token::Semicolon = pop_token(tokens) {
+                    Some(expression)
+                } else {
+                    panic!("Expected ;");
+                }
+            };
+
+            let post = if let Token::CParen = peek_token(tokens) {
+                None
+            } else {
+                Some(parse_expression(tokens, 0, context))
+            };
+
+            if let Token::CParen = pop_token(tokens) {
+                let body = parse_statement(tokens, context);
+
+                Statement::For {
+                    for_init,
+                    condition,
+                    post,
+                    body: Box::new(body),
+                    label: LoopLabel(None),
+                }
+            } else {
+                panic!("Expected )");
+            }
+        } else {
+            panic!("Expected (");
+        }
     } else if let Token::Semicolon = peek_token(tokens) {
         _ = pop_token(tokens);
         Statement::Null
@@ -403,9 +553,22 @@ fn parse_declaration<'a>(
     }
 }
 
-fn parse_block_item<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> BlockItem<'a> {
+fn maybe_parse_declaration<'a>(
+    tokens: &mut Vec<Token<'a>>,
+    context: &mut Context<'a>,
+) -> Option<Declaration<'a>> {
     if let Token::Int = peek_token(tokens) {
-        BlockItem::Declaration(parse_declaration(tokens, context))
+        Some(parse_declaration(tokens, context))
+    } else {
+        None
+    }
+}
+
+fn parse_block_item<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> BlockItem<'a> {
+    let declaration = maybe_parse_declaration(tokens, context);
+
+    if let Some(declaration) = declaration {
+        BlockItem::Declaration(declaration)
     } else {
         BlockItem::Statement(parse_statement(tokens, context))
     }

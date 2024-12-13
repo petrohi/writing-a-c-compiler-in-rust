@@ -368,6 +368,25 @@ fn gen_statement<'a, 'b>(
             condition_instructions
         }
         parser::Statement::Block(block) => gen_block(block, context),
+        parser::Statement::Break(loop_label) => todo!(),
+        parser::Statement::Continue(loop_label) => todo!(),
+        parser::Statement::While {
+            condition,
+            body,
+            label,
+        } => todo!(),
+        parser::Statement::DoWhile {
+            body,
+            condition,
+            label,
+        } => todo!(),
+        parser::Statement::For {
+            for_init,
+            condition,
+            post,
+            body,
+            label,
+        } => todo!(),
     }
 }
 
