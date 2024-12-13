@@ -367,6 +367,7 @@ fn gen_statement<'a, 'b>(
 
             condition_instructions
         }
+        parser::Statement::Block(block) => todo!(),
     }
 }
 
@@ -390,7 +391,7 @@ fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context
     let parser::Function { body, name } = function;
     let mut instructions = Vec::new();
 
-    for block_item in body {
+    for block_item in body.0 {
         match block_item {
             parser::BlockItem::Statement(statement) => {
                 instructions.extend(gen_statement(statement, context));

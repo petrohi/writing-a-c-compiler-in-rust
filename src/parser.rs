@@ -121,6 +121,7 @@ pub enum Statement<'a> {
         then: Box<Statement<'a>>,
         els: Option<Box<Statement<'a>>>,
     },
+    Block(Block<'a>),
 }
 
 #[derive(Debug)]
@@ -130,9 +131,12 @@ pub enum BlockItem<'a> {
 }
 
 #[derive(Debug)]
+pub struct Block<'a>(pub Vec<BlockItem<'a>>);
+
+#[derive(Debug)]
 pub struct Function<'a> {
     pub name: Identifier<'a>,
-    pub body: Vec<BlockItem<'a>>,
+    pub body: Block<'a>,
 }
 #[derive(Debug)]
 pub struct Program<'a>(pub Function<'a>);
@@ -320,6 +324,18 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
     } else if let Token::Semicolon = peek_token(tokens) {
         _ = pop_token(tokens);
         Statement::Null
+    } else if let Token::OBrace = peek_token(tokens) {
+        _ = pop_token(tokens);
+        let mut block_items = Vec::new();
+        loop {
+            if let Token::CBrace = peek_token(tokens) {
+                _ = pop_token(tokens);
+                break;
+            }
+            let block_item = parse_block_item(tokens, context);
+            block_items.push(block_item);
+        }
+        Statement::Block(Block(block_items))
     } else {
         let expression = parse_expression(tokens, 0, context);
 
@@ -387,7 +403,7 @@ fn parse_function<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) ->
                             }
 
                             Function {
-                                body: block_items,
+                                body: Block(block_items),
                                 name: identifier,
                             }
                         } else {
