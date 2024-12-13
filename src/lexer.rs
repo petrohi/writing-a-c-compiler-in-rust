@@ -9,6 +9,11 @@ pub enum Token<'a> {
     Return,
     If,
     Else,
+    Do,
+    While,
+    For,
+    Break,
+    Continue,
     Identifier(parser::Identifier<'a>),
     Constant(parser::Constant<'a>),
     OParen,
@@ -82,6 +87,46 @@ pub fn lex(source: &String) -> Vec<Token> {
         RegexTokenizer {
             regex: "(?<else>else\\b)",
             match_to_token: |_| Token::Else,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "do",
+        RegexTokenizer {
+            regex: "(?<do>do\\b)",
+            match_to_token: |_| Token::Do,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "while",
+        RegexTokenizer {
+            regex: "(?<while>while\\b)",
+            match_to_token: |_| Token::While,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "for",
+        RegexTokenizer {
+            regex: "(?<for>for\\b)",
+            match_to_token: |_| Token::For,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "break",
+        RegexTokenizer {
+            regex: "(?<break>break\\b)",
+            match_to_token: |_| Token::Break,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "continue",
+        RegexTokenizer {
+            regex: "(?<continue>continue\\b)",
+            match_to_token: |_| Token::Continue,
         },
     ));
 
