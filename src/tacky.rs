@@ -77,6 +77,8 @@ pub struct Context {
     last_tmp_index: usize,
     last_label_index: usize,
     var_to_tmp: HashMap<usize, usize>,
+    break_labels: HashMap<usize, usize>,
+    continue_labels: HashMap<usize, usize>,
 }
 
 impl Context {
@@ -85,6 +87,8 @@ impl Context {
             last_tmp_index: 0,
             last_label_index: 0,
             var_to_tmp: HashMap::new(),
+            break_labels: HashMap::new(),
+            continue_labels: HashMap::new(),
         }
     }
 
@@ -94,7 +98,9 @@ impl Context {
         tmp
     }
 
-    fn var_tmp<'a, 'b>(self: &'a mut Self, var: usize) -> Val<'b> {
+    fn resolve_parser_var<'a, 'b>(self: &'a mut Self, var: &parser::Var) -> Val<'b> {
+        let var = var.0.unwrap();
+
         if let Some(tmp) = self.var_to_tmp.get(&var) {
             Val::Tmp(*tmp)
         } else {
@@ -102,6 +108,32 @@ impl Context {
             self.var_to_tmp.insert(var, tmp);
             self.last_tmp_index += 1;
             Val::Tmp(tmp)
+        }
+    }
+
+    fn resolve_break_label<'a, 'b>(self: &'a mut Self, break_label: &parser::Label) -> Label {
+        let break_label = break_label.0.unwrap();
+
+        if let Some(label) = self.break_labels.get(&break_label) {
+            Label(*label)
+        } else {
+            let label = self.last_label_index;
+            self.break_labels.insert(break_label, label);
+            self.last_label_index += 1;
+            Label(label)
+        }
+    }
+
+    fn resolve_continue_label<'a, 'b>(self: &'a mut Self, continue_label: &parser::Label) -> Label {
+        let continue_label = continue_label.0.unwrap();
+
+        if let Some(label) = self.continue_labels.get(&continue_label) {
+            Label(*label)
+        } else {
+            let label = self.last_label_index;
+            self.continue_labels.insert(continue_label, label);
+            self.last_label_index += 1;
+            Label(label)
         }
     }
 
@@ -266,7 +298,7 @@ fn gen_val<'a, 'b>(
             }
         }
         parser::Expression::Var(var) => {
-            let dst = context.var_tmp(var.0.unwrap());
+            let dst = context.resolve_parser_var(&var);
             (dst, Vec::new())
         }
         parser::Expression::Assignment { lvalue, rvalue } => {
@@ -368,25 +400,102 @@ fn gen_statement<'a, 'b>(
             condition_instructions
         }
         parser::Statement::Block(block) => gen_block(block, context),
-        parser::Statement::Break(loop_label) => todo!(),
-        parser::Statement::Continue(loop_label) => todo!(),
+        parser::Statement::Break(label) => vec![Instruction::Jump {
+            target: context.resolve_break_label(&label),
+        }],
+        parser::Statement::Continue(label) => vec![Instruction::Jump {
+            target: context.resolve_continue_label(&label),
+        }],
         parser::Statement::While {
             condition,
             body,
             label,
-        } => todo!(),
+        } => {
+            let mut instructions = Vec::new();
+            let start = context.resolve_continue_label(&label);
+            let end = context.resolve_break_label(&label);
+
+            instructions.push(Instruction::Label(start.clone()));
+            let (condition, condition_instructions) = gen_val(condition, context);
+
+            instructions.extend(condition_instructions);
+            instructions.push(Instruction::JumpIfZero {
+                condition,
+                target: end.clone(),
+            });
+            instructions.extend(gen_statement(*body, context));
+            instructions.extend([Instruction::Jump { target: start }, Instruction::Label(end)]);
+
+            instructions
+        }
         parser::Statement::DoWhile {
             body,
             condition,
             label,
-        } => todo!(),
+        } => {
+            let mut instructions = Vec::new();
+            let start = context.next_label();
+
+            instructions.push(Instruction::Label(start.clone()));
+            instructions.extend(gen_statement(*body, context));
+            instructions.push(Instruction::Label(context.resolve_continue_label(&label)));
+
+            let (condition, condition_instructions) = gen_val(condition, context);
+
+            instructions.extend(condition_instructions);
+            instructions.extend([
+                Instruction::JumpIfNotZero {
+                    condition,
+                    target: start,
+                },
+                Instruction::Label(context.resolve_break_label(&label)),
+            ]);
+
+            instructions
+        }
         parser::Statement::For {
             for_init,
             condition,
             post,
             body,
             label,
-        } => todo!(),
+        } => {
+            let mut instructions = match for_init {
+                parser::ForInit::InitDecl(declaration) => gen_declaration(declaration, context),
+                parser::ForInit::InitExp(expression) => {
+                    let (_, init_instructions) = gen_val(expression, context);
+                    init_instructions
+                }
+                parser::ForInit::Null => Vec::new(),
+            };
+
+            let start = context.next_label();
+            let end = context.resolve_break_label(&label);
+
+            instructions.push(Instruction::Label(start.clone()));
+
+            if let Some(condition) = condition {
+                let (condition, condition_instructions) = gen_val(condition, context);
+
+                instructions.extend(condition_instructions);
+                instructions.push(Instruction::JumpIfZero {
+                    condition,
+                    target: end.clone(),
+                });
+            }
+
+            instructions.extend(gen_statement(*body, context));
+            instructions.push(Instruction::Label(context.resolve_continue_label(&label)));
+
+            if let Some(post) = post {
+                let (_, post_instructions) = gen_val(post, context);
+                instructions.extend(post_instructions);
+            }
+
+            instructions.extend([Instruction::Jump { target: start }, Instruction::Label(end)]);
+
+            instructions
+        }
     }
 }
 
@@ -398,7 +507,7 @@ fn gen_declaration<'a, 'b>(
 
     if let Some(expression) = expression {
         let (src, mut instructions) = gen_val(expression, context);
-        let dst = context.var_tmp(var.0.unwrap());
+        let dst = context.resolve_parser_var(&var);
         instructions.push(Instruction::Copy { src, dst });
         instructions
     } else {
