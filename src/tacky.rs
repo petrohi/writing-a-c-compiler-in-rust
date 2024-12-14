@@ -266,7 +266,7 @@ fn gen_val<'a, 'b>(
             }
         }
         parser::Expression::Var(var) => {
-            let dst = context.var_tmp(var);
+            let dst = context.var_tmp(var.0.unwrap());
             (dst, Vec::new())
         }
         parser::Expression::Assignment { lvalue, rvalue } => {
@@ -398,7 +398,7 @@ fn gen_declaration<'a, 'b>(
 
     if let Some(expression) = expression {
         let (src, mut instructions) = gen_val(expression, context);
-        let dst = context.var_tmp(var);
+        let dst = context.var_tmp(var.0.unwrap());
         instructions.push(Instruction::Copy { src, dst });
         instructions
     } else {

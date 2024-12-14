@@ -34,7 +34,10 @@ pub enum BinaryOperator {
 pub struct Context<'a> {
     validate: bool,
     last_var_index: usize,
-    scopes: Vec<HashMap<&'a str, usize>>,
+    var_scopes: Vec<HashMap<&'a str, usize>>,
+    last_label_index: usize,
+    break_scopes: Vec<usize>,
+    continue_scopes: Vec<usize>,
 }
 
 impl<'a> Context<'a> {
@@ -42,21 +45,71 @@ impl<'a> Context<'a> {
         Context {
             validate,
             last_var_index: 0,
-            scopes: vec![HashMap::new()],
+            last_label_index: 0,
+            var_scopes: vec![HashMap::new()],
+            break_scopes: Vec::new(),
+            continue_scopes: Vec::new(),
         }
     }
 
-    fn push_scope(self: &mut Self) {
-        self.scopes.push(HashMap::new());
-    }
-
-    fn pop_scope(self: &mut Self) {
-        self.scopes.pop();
-    }
-
-    fn declare_var(self: &mut Self, identifier: &Identifier<'a>) -> usize {
+    fn push_var_scope(self: &mut Self) {
         if self.validate {
-            let scope = self.scopes.last_mut().unwrap();
+            self.var_scopes.push(HashMap::new());
+        }
+    }
+
+    fn pop_var_scope(self: &mut Self) {
+        if self.validate {
+            self.var_scopes.pop();
+        }
+    }
+
+    fn push_loop_scope(self: &mut Self) -> Label {
+        if self.validate {
+            self.break_scopes.push(self.last_label_index);
+            self.continue_scopes.push(self.last_label_index);
+            let label = Label(Some(self.last_label_index));
+            self.last_label_index += 1;
+            label
+        } else {
+            Label(None)
+        }
+    }
+
+    fn pop_loop_scope(self: &mut Self) {
+        if self.validate {
+            self.break_scopes.pop();
+            self.continue_scopes.pop();
+        }
+    }
+
+    fn get_break_label(self: &mut Self) -> Label {
+        if self.validate {
+            if !self.break_scopes.is_empty() {
+                Label(Some(*self.break_scopes.last().unwrap()))
+            } else {
+                panic!("Encountered break outside of loop")
+            }
+        } else {
+            Label(None)
+        }
+    }
+
+    fn get_continue_label(self: &mut Self) -> Label {
+        if self.validate {
+            if !self.continue_scopes.is_empty() {
+                Label(Some(*self.continue_scopes.last().unwrap()))
+            } else {
+                panic!("Encountered continue outside of loop")
+            }
+        } else {
+            Label(None)
+        }
+    }
+
+    fn declare_var(self: &mut Self, identifier: &Identifier<'a>) -> Var {
+        if self.validate {
+            let scope = self.var_scopes.last_mut().unwrap();
             if scope.contains_key(identifier.0) {
                 panic!("Variable is already declared");
             }
@@ -64,16 +117,16 @@ impl<'a> Context<'a> {
             let var = self.last_var_index;
             self.last_var_index += 1;
             scope.insert(identifier.0, var);
-            var
+            Var(Some(var))
         } else {
-            0
+            Var(None)
         }
     }
 
-    fn get_var(self: &Self, identifier: &Identifier<'a>) -> Expression<'a> {
+    fn get_var(self: &Self, identifier: &Identifier<'a>) -> Var {
         if self.validate {
             let mut var = None;
-            for scope in self.scopes.iter().rev() {
+            for scope in self.var_scopes.iter().rev() {
                 var = scope.get(identifier.0);
                 if var.is_some() {
                     break;
@@ -81,12 +134,12 @@ impl<'a> Context<'a> {
             }
 
             if let Some(var) = var {
-                Expression::Var(*var)
+                Var(Some(*var))
             } else {
                 panic!("Undeclared variable")
             }
         } else {
-            Expression::Var(0)
+            Var(None)
         }
     }
 
@@ -102,16 +155,20 @@ impl<'a> Context<'a> {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct Var(pub Option<usize>);
+
 #[derive(Debug)]
 pub struct Declaration<'a> {
-    pub var: usize,
+    pub var: Var,
     pub expression: Option<Expression<'a>>,
 }
 
 #[derive(Debug)]
 pub enum Expression<'a> {
     Constant(Constant<'a>),
-    Var(usize),
+    Var(Var),
     Unary {
         operator: UnaryOperator,
         expression: Box<Expression<'a>>,
@@ -133,7 +190,7 @@ pub enum Expression<'a> {
 }
 
 #[derive(Debug)]
-pub struct LoopLabel(Option<usize>);
+pub struct Label(pub Option<usize>);
 
 #[derive(Debug)]
 pub enum ForInit<'a> {
@@ -153,24 +210,24 @@ pub enum Statement<'a> {
         els: Option<Box<Statement<'a>>>,
     },
     Block(Block<'a>),
-    Break(LoopLabel),
-    Continue(LoopLabel),
+    Break(Label),
+    Continue(Label),
     While {
         condition: Expression<'a>,
         body: Box<Statement<'a>>,
-        label: LoopLabel,
+        label: Label,
     },
     DoWhile {
         body: Box<Statement<'a>>,
         condition: Expression<'a>,
-        label: LoopLabel,
+        label: Label,
     },
     For {
         for_init: ForInit<'a>,
         condition: Option<Expression<'a>>,
         post: Option<Expression<'a>>,
         body: Box<Statement<'a>>,
-        label: LoopLabel,
+        label: Label,
     },
 }
 
@@ -244,7 +301,7 @@ fn parse_factor<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -> E
         }
         Token::Identifier(_) => {
             if let Token::Identifier(identifier) = pop_token(tokens) {
-                context.get_var(&identifier)
+                Expression::Var(context.get_var(&identifier))
             } else {
                 panic!()
             }
@@ -377,14 +434,14 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
     } else if let Token::Break = peek_token(tokens) {
         _ = pop_token(tokens);
         if let Token::Semicolon = pop_token(tokens) {
-            Statement::Break(LoopLabel(None))
+            Statement::Break(context.get_break_label())
         } else {
             panic!("Expected ;")
         }
     } else if let Token::Continue = peek_token(tokens) {
         _ = pop_token(tokens);
         if let Token::Semicolon = pop_token(tokens) {
-            Statement::Continue(LoopLabel(None))
+            Statement::Continue(context.get_continue_label())
         } else {
             panic!("Expected ;")
         }
@@ -395,12 +452,16 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
             let condition = parse_expression(tokens, 0, context);
 
             if let Token::CParen = pop_token(tokens) {
+                let label = context.push_loop_scope();
+
                 let body = parse_statement(tokens, context);
+
+                context.pop_loop_scope();
 
                 Statement::While {
                     condition,
                     body: Box::new(body),
-                    label: LoopLabel(None),
+                    label,
                 }
             } else {
                 panic!("Expected )");
@@ -410,7 +471,12 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
         }
     } else if let Token::Do = peek_token(tokens) {
         _ = pop_token(tokens);
+
+        let label = context.push_loop_scope();
+
         let body = parse_statement(tokens, context);
+
+        context.pop_loop_scope();
 
         if let Token::While = pop_token(tokens) {
             if let Token::OParen = pop_token(tokens) {
@@ -421,7 +487,7 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
                         Statement::DoWhile {
                             body: Box::new(body),
                             condition,
-                            label: LoopLabel(None),
+                            label,
                         }
                     } else {
                         panic!("Expected ;");
@@ -437,6 +503,8 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
         }
     } else if let Token::For = peek_token(tokens) {
         _ = pop_token(tokens);
+
+        context.push_var_scope();
 
         if let Token::OParen = pop_token(tokens) {
             let for_init = if let Token::Semicolon = peek_token(tokens) {
@@ -476,14 +544,19 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
             };
 
             if let Token::CParen = pop_token(tokens) {
+                let label = context.push_loop_scope();
+
                 let body = parse_statement(tokens, context);
+
+                context.pop_loop_scope();
+                context.pop_var_scope();
 
                 Statement::For {
                     for_init,
                     condition,
                     post,
                     body: Box::new(body),
-                    label: LoopLabel(None),
+                    label,
                 }
             } else {
                 panic!("Expected )");
@@ -498,7 +571,7 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
         _ = pop_token(tokens);
         let mut block_items = Vec::new();
 
-        context.push_scope();
+        context.push_var_scope();
 
         loop {
             if let Token::CBrace = peek_token(tokens) {
@@ -509,7 +582,7 @@ fn parse_statement<'a>(tokens: &mut Vec<Token<'a>>, context: &mut Context<'a>) -
             block_items.push(block_item);
         }
 
-        context.pop_scope();
+        context.pop_var_scope();
 
         Statement::Block(Block(block_items))
     } else {
