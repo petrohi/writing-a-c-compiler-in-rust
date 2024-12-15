@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{
-    lexer,
-    tacky,
-};
+use crate::{lexer, parser, tacky};
 
 #[derive(Clone, Debug)]
 pub enum Register {
@@ -84,7 +81,7 @@ pub enum Instruction<'a> {
 
 #[derive(Debug)]
 pub struct Function<'a> {
-    name: lexer::Identifier<'a>,
+    func: parser::Func<'a>,
     instructions: Vec<Instruction<'a>>,
     stack_size: usize,
 }
@@ -280,9 +277,9 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
 }
 
 fn gen_function(function: tacky::Function) -> Function {
-    let tacky::Function { instructions, name } = function;
+    let tacky::Function { instructions, func } = function;
     Function {
-        name,
+        func,
         instructions: gen_instructions(instructions),
         stack_size: 0,
     }
@@ -320,7 +317,7 @@ fn rewrite_operand_to_eliminate_psedo<'a>(
 
 fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     let Function {
-        instructions, name, ..
+        instructions, func, ..
     } = function;
     let mut rewritten_instructions = Vec::new();
     let mut stack = HashMap::new();
@@ -356,7 +353,7 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     }
 
     Function {
-        name,
+        func,
         instructions: rewritten_instructions,
         stack_size: stack.len() * 4,
     }
@@ -375,7 +372,7 @@ pub fn rewrite_program_to_eliminate_psedo(program: Program) -> Program {
 fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     let Function {
         instructions,
-        name,
+        func,
         stack_size,
     } = function;
     let mut rewritten_instructions = Vec::new();
@@ -480,7 +477,7 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     }
 
     Function {
-        name,
+        func,
         instructions: rewritten_instructions,
         stack_size,
     }
@@ -628,16 +625,16 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
 
 fn emit_function(function: Function) -> Vec<Fragment> {
     let Function {
-        name,
+        func,
         instructions,
         stack_size,
     } = function;
     let mut text = Vec::new();
 
     text.push(Fragment::Str("\t.globl "));
-    text.push(Fragment::Str(name.0));
+    text.push(Fragment::Str(func.0));
     text.push(Fragment::Str("\n"));
-    text.push(Fragment::Str(name.0));
+    text.push(Fragment::Str(func.0));
     text.push(Fragment::Str(":\n"));
 
     text.push(Fragment::Str("\tpushq %rbp\n"));

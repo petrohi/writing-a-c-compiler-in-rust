@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{
-    lexer,
-    parser,
-};
+use crate::{lexer, parser};
 
 #[derive(Debug, Clone)]
 pub enum Val<'a> {
@@ -70,7 +67,7 @@ pub enum Instruction<'a> {
 
 #[derive(Debug)]
 pub struct Function<'a> {
-    pub name: lexer::Identifier<'a>,
+    pub func: parser::Func<'a>,
     pub instructions: Vec<Instruction<'a>>,
 }
 
@@ -534,7 +531,8 @@ fn gen_block<'a, 'b>(block: parser::Block<'a>, context: &'b mut Context) -> Vec<
                 parser::Declaration::VariableDeclaration(variable_declaration) => {
                     instructions.extend(gen_variable_declaration(variable_declaration, context))
                 }
-                parser::Declaration::FunctionDeclaration(function_declaration) => todo!(),
+                parser::Declaration::FunctionDeclaration => (),
+                parser::Declaration::FunctionDefinition(_) => panic!(),
             },
         }
     }
@@ -543,22 +541,20 @@ fn gen_block<'a, 'b>(block: parser::Block<'a>, context: &'b mut Context) -> Vec<
 }
 
 fn maybe_gen_function<'a, 'b>(
-    function: parser::FunctionDeclaration<'a>,
+    declaration: parser::Declaration<'a>,
     context: &'b mut Context,
 ) -> Option<Function<'a>> {
-    let parser::FunctionDeclaration { body, .. } = function;
+    match declaration {
+        parser::Declaration::VariableDeclaration(_) => None,
+        parser::Declaration::FunctionDeclaration => None,
+        parser::Declaration::FunctionDefinition(function_definition) => {
+            let parser::FunctionDefinition { func, body, params } = function_definition;
+            let mut instructions = Vec::new();
+            instructions.extend(gen_block(body, context));
+            instructions.push(Instruction::Return(Val::Constant(lexer::Constant("0"))));
 
-    if let Some(body) = body {
-        let mut instructions = Vec::new();
-        instructions.extend(gen_block(body, context));
-        instructions.push(Instruction::Return(Val::Constant(lexer::Constant("0"))));
-
-        Some(Function {
-            name: lexer::Identifier("main"),
-            instructions,
-        })
-    } else {
-        None
+            Some(Function { func, instructions })
+        }
     }
 }
 

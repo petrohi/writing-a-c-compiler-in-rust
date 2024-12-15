@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::lexer;
 
@@ -26,10 +26,16 @@ pub enum BinaryOperator {
     Or,
 }
 
+struct FuncSignature {
+    arity: usize,
+}
+
 pub struct Context<'a> {
     validate: bool,
     last_var_index: usize,
-    var_scopes: Vec<HashMap<&'a str, usize>>,
+    func_signatures: HashMap<&'a str, FuncSignature>,
+    defined_funcs: HashSet<&'a str>,
+    id_scopes: Vec<HashMap<&'a str, Identifier>>,
     last_label_index: usize,
     break_scopes: Vec<usize>,
     continue_scopes: Vec<usize>,
@@ -41,7 +47,9 @@ impl<'a> Context<'a> {
             validate,
             last_var_index: 0,
             last_label_index: 0,
-            var_scopes: vec![HashMap::new()],
+            func_signatures: HashMap::new(),
+            defined_funcs: HashSet::new(),
+            id_scopes: vec![HashMap::new()],
             break_scopes: Vec::new(),
             continue_scopes: Vec::new(),
         }
@@ -49,13 +57,13 @@ impl<'a> Context<'a> {
 
     fn push_var_scope(self: &mut Self) {
         if self.validate {
-            self.var_scopes.push(HashMap::new());
+            self.id_scopes.push(HashMap::new());
         }
     }
 
     fn pop_var_scope(self: &mut Self) {
         if self.validate {
-            self.var_scopes.pop();
+            self.id_scopes.pop();
         }
     }
 
@@ -104,38 +112,114 @@ impl<'a> Context<'a> {
 
     fn declare_var(self: &mut Self, identifier: &lexer::Identifier<'a>) -> Var {
         if self.validate {
-            let scope = self.var_scopes.last_mut().unwrap();
+            let scope = self.id_scopes.last_mut().unwrap();
             if scope.contains_key(identifier.0) {
-                panic!("Variable is already declared");
+                panic!("Identifier is already declared");
             }
 
-            let var = self.last_var_index;
+            let var = Var(Some(self.last_var_index));
             self.last_var_index += 1;
-            scope.insert(identifier.0, var);
-            Var(Some(var))
+            scope.insert(identifier.0, Identifier::Var(var.clone()));
+            var
         } else {
             Var(None)
         }
     }
 
-    fn get_var(self: &Self, identifier: &lexer::Identifier<'a>) -> Var {
+    fn declare_func(
+        self: &mut Self,
+        identifier: &lexer::Identifier<'a>,
+        param_identifiers: &Vec<lexer::Identifier<'a>>,
+    ) -> Func<'a> {
+        let func = Func(identifier.0);
+
         if self.validate {
-            let mut var = None;
-            for scope in self.var_scopes.iter().rev() {
-                var = scope.get(identifier.0);
-                if var.is_some() {
-                    break;
+            let arity = param_identifiers.len();
+            let mut unique_param_identifiers = HashSet::new();
+
+            for param_identifier in param_identifiers {
+                if !unique_param_identifiers.insert(param_identifier.0) {
+                    panic!("Parameter names must be unique");
                 }
             }
 
-            if let Some(var) = var {
-                Var(Some(*var))
+            if let Some(func_signature) = self.func_signatures.get(identifier.0) {
+                if func_signature.arity != arity {
+                    panic!("Function redeclared with different signature");
+                }
+            } else {
+                self.func_signatures
+                    .insert(identifier.0, FuncSignature { arity });
+            }
+
+            let scope = self.id_scopes.last_mut().unwrap();
+
+            match scope.get(identifier.0) {
+                Some(Identifier::Func) => (),
+                Some(Identifier::Var(_)) => panic!("Variable redefined as function"),
+                None => {
+                    scope.insert(identifier.0, Identifier::Func);
+                }
+            }
+        }
+
+        func
+    }
+
+    fn define_func(
+        self: &mut Self,
+        identifier: &lexer::Identifier<'a>,
+        param_identifiers: &Vec<lexer::Identifier<'a>>,
+    ) -> Func<'a> {
+        let func = self.declare_func(identifier, param_identifiers);
+
+        if self.validate {
+            if self.id_scopes.len() == 1 {
+                if !self.defined_funcs.insert(func.0) {
+                    panic!("Function redefined");
+                }
+            } else {
+                panic!("Nested function declaration not permitted");
+            }
+        }
+
+        func
+    }
+
+    fn get_var(self: &Self, identifier: &lexer::Identifier<'a>) -> Var {
+        if self.validate {
+            if let Some(id) = self.try_find_id(identifier) {
+                if let Identifier::Var(var) = id {
+                    var.clone()
+                } else {
+                    panic!("Function redefined as variable")
+                }
             } else {
                 panic!("Undeclared variable")
             }
         } else {
             Var(None)
         }
+    }
+
+    fn get_func(self: &Self, identifier: &lexer::Identifier<'a>, arity: usize) -> Func<'a> {
+        let func = Func(identifier.0);
+
+        if self.validate {
+            if let Some(id) = self.try_find_id(identifier) {
+                if let Identifier::Func = id {
+                    if self.func_signatures.get(identifier.0).unwrap().arity != arity {
+                        panic!("Function called with different signature");
+                    }
+                } else {
+                    panic!("Variable used as function")
+                }
+            } else {
+                panic!("Undeclared function")
+            }
+        }
+
+        func
     }
 
     fn is_valid_lvalue(self: &Self, lvalue: &Expression) -> bool {
@@ -149,13 +233,30 @@ impl<'a> Context<'a> {
             true
         }
     }
+
+    fn try_find_id(self: &Self, identifier: &lexer::Identifier<'a>) -> Option<Identifier> {
+        let mut id = None;
+        for scope in self.id_scopes.iter().rev() {
+            id = scope.get(identifier.0).cloned();
+            if id.is_some() {
+                break;
+            }
+        }
+        id
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Var(pub Option<usize>);
 
-#[derive(Debug)]
-pub struct Func(pub Option<usize>);
+#[derive(Debug, Clone)]
+pub struct Func<'a>(pub &'a str);
+
+#[derive(Debug, Clone)]
+pub enum Identifier {
+    Var(Var),
+    Func,
+}
 
 #[derive(Debug)]
 pub struct VariableDeclaration<'a> {
@@ -164,16 +265,17 @@ pub struct VariableDeclaration<'a> {
 }
 
 #[derive(Debug)]
-pub struct FunctionDeclaration<'a> {
-    pub func: Func,
+pub struct FunctionDefinition<'a> {
+    pub func: Func<'a>,
     pub params: Vec<Var>,
-    pub body: Option<Block<'a>>,
+    pub body: Block<'a>,
 }
 
 #[derive(Debug)]
 pub enum Declaration<'a> {
     VariableDeclaration(VariableDeclaration<'a>),
-    FunctionDeclaration(FunctionDeclaration<'a>),
+    FunctionDeclaration,
+    FunctionDefinition(FunctionDefinition<'a>),
 }
 
 #[derive(Debug)]
@@ -199,7 +301,7 @@ pub enum Expression<'a> {
         els: Box<Expression<'a>>,
     },
     FunctionCall {
-        func: Func,
+        func: Func<'a>,
         args: Vec<Expression<'a>>,
     },
 }
@@ -256,7 +358,7 @@ pub enum BlockItem<'a> {
 pub struct Block<'a>(pub Vec<BlockItem<'a>>);
 
 #[derive(Debug)]
-pub struct Program<'a>(pub Vec<FunctionDeclaration<'a>>);
+pub struct Program<'a>(pub Vec<Declaration<'a>>);
 
 fn peek_token<'a, 'b>(tokens: &'b Vec<lexer::Token<'a>>) -> &'b lexer::Token<'a> {
     match tokens.last() {
@@ -332,10 +434,9 @@ fn parse_factor<'a>(
                         }
                     }
 
-                    Expression::FunctionCall {
-                        func: Func(None),
-                        args,
-                    }
+                    let func = context.get_func(&identifier, args.len());
+
+                    Expression::FunctionCall { func, args }
                 } else {
                     Expression::Var(context.get_var(&identifier))
                 }
@@ -439,8 +540,6 @@ fn parse_block<'a>(tokens: &mut Vec<lexer::Token<'a>>, context: &mut Context<'a>
     _ = pop_token(tokens);
     let mut block_items = Vec::new();
 
-    context.push_var_scope();
-
     loop {
         if let lexer::Token::CBrace = peek_token(tokens) {
             _ = pop_token(tokens);
@@ -450,10 +549,9 @@ fn parse_block<'a>(tokens: &mut Vec<lexer::Token<'a>>, context: &mut Context<'a>
         block_items.push(block_item);
     }
 
-    context.pop_var_scope();
-
     Block(block_items)
 }
+
 fn parse_statement<'a>(
     tokens: &mut Vec<lexer::Token<'a>>,
     context: &mut Context<'a>,
@@ -632,7 +730,13 @@ fn parse_statement<'a>(
         _ = pop_token(tokens);
         Statement::Null
     } else if let lexer::Token::OBrace = peek_token(tokens) {
-        Statement::Block(parse_block(tokens, context))
+        context.push_var_scope();
+
+        let statement = Statement::Block(parse_block(tokens, context));
+
+        context.pop_var_scope();
+
+        statement
     } else {
         let expression = parse_expression(tokens, 0, context);
 
@@ -653,7 +757,7 @@ fn parse_declaration<'a>(
             if let lexer::Token::OParen = peek_token(tokens) {
                 _ = pop_token(tokens);
 
-                let params = if let lexer::Token::Void = peek_token(tokens) {
+                let param_identifiers = if let lexer::Token::Void = peek_token(tokens) {
                     _ = pop_token(tokens);
                     if let lexer::Token::CParen = pop_token(tokens) {
                         Vec::new()
@@ -661,12 +765,12 @@ fn parse_declaration<'a>(
                         panic!("Expected )");
                     }
                 } else {
-                    let mut params = Vec::new();
+                    let mut param_identifiers = Vec::new();
 
                     loop {
                         if let lexer::Token::Int = pop_token(tokens) {
                             if let lexer::Token::Identifier(param_identifier) = pop_token(tokens) {
-                                params.push(context.get_var(&param_identifier));
+                                param_identifiers.push(param_identifier);
 
                                 match pop_token(tokens) {
                                     lexer::Token::Comma => (),
@@ -681,24 +785,32 @@ fn parse_declaration<'a>(
                         }
                     }
 
-                    params
+                    param_identifiers
                 };
 
-                let body = if let lexer::Token::OBrace = peek_token(tokens) {
-                    Some(parse_block(tokens, context))
+                if let lexer::Token::OBrace = peek_token(tokens) {
+                    let func = context.define_func(&identifier, &param_identifiers);
+
+                    context.push_var_scope();
+
+                    let params = param_identifiers
+                        .into_iter()
+                        .map(|identifier| context.declare_var(&identifier))
+                        .collect();
+                    let body = parse_block(tokens, context);
+
+                    context.pop_var_scope();
+
+                    Declaration::FunctionDefinition(FunctionDefinition { func, params, body })
                 } else {
                     if let lexer::Token::Semicolon = pop_token(tokens) {
-                        None
+                        _ = context.declare_func(&identifier, &param_identifiers);
+
+                        Declaration::FunctionDeclaration
                     } else {
                         panic!("Expected ;");
                     }
-                };
-
-                Declaration::FunctionDeclaration(FunctionDeclaration {
-                    func: Func(None),
-                    params,
-                    body,
-                })
+                }
             } else {
                 let var = context.declare_var(&identifier);
 
@@ -756,12 +868,7 @@ pub fn parse_program<'a>(
     let mut function_declarations = Vec::new();
 
     while !tokens.is_empty() {
-        match parse_declaration(tokens, context) {
-            Declaration::VariableDeclaration(_) => panic!("Expected <function declaration>"),
-            Declaration::FunctionDeclaration(function_declaration) => {
-                function_declarations.push(function_declaration)
-            }
-        }
+        function_declarations.push(parse_declaration(tokens, context));
     }
 
     Program(function_declarations)
