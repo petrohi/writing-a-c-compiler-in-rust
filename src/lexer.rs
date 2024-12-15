@@ -40,6 +40,7 @@ pub enum Token<'a> {
     DoublePipe,
     Question,
     Colon,
+    Comma,
 }
 
 struct RegexTokenizer<'a, 'b> {
@@ -335,6 +336,14 @@ pub fn lex(source: &String) -> Vec<Token> {
         RegexTokenizer {
             regex: "(?<colon>:)",
             match_to_token: |_| Token::Colon,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "comma",
+        RegexTokenizer {
+            regex: "(?<comma>,)",
+            match_to_token: |_| Token::Comma,
         },
     ));
 
