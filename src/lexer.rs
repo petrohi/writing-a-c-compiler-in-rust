@@ -1,6 +1,9 @@
 use regex::{Match, Regex};
 
-use crate::parser;
+#[derive(Debug, Clone)]
+pub struct Identifier<'a>(pub &'a str);
+#[derive(Debug, Clone)]
+pub struct Constant<'a>(pub &'a str);
 
 #[derive(Debug)]
 pub enum Token<'a> {
@@ -14,8 +17,8 @@ pub enum Token<'a> {
     For,
     Break,
     Continue,
-    Identifier(parser::Identifier<'a>),
-    Constant(parser::Constant<'a>),
+    Identifier(Identifier<'a>),
+    Constant(Constant<'a>),
     OParen,
     CParen,
     OBrace,
@@ -135,7 +138,7 @@ pub fn lex(source: &String) -> Vec<Token> {
         "identifier",
         RegexTokenizer {
             regex: "(?<identifier>[a-zA-Z_]\\w*\\b)",
-            match_to_token: |m| Token::Identifier(parser::Identifier(m.as_str())),
+            match_to_token: |m| Token::Identifier(Identifier(m.as_str())),
         },
     ));
 
@@ -143,7 +146,7 @@ pub fn lex(source: &String) -> Vec<Token> {
         "constant",
         RegexTokenizer {
             regex: "(?<constant>[0-9]+\\b)",
-            match_to_token: |m| Token::Constant(parser::Constant(m.as_str())),
+            match_to_token: |m| Token::Constant(Constant(m.as_str())),
         },
     ));
 

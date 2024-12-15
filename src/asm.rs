@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    parser::{self, Constant},
+    lexer,
     tacky,
 };
 
@@ -15,7 +15,7 @@ pub enum Register {
 
 #[derive(Clone, Debug)]
 pub enum Operand<'a> {
-    Imm(parser::Constant<'a>),
+    Imm(lexer::Constant<'a>),
     Register(Register),
     Pseudo(usize),
     Stack(usize),
@@ -84,12 +84,12 @@ pub enum Instruction<'a> {
 
 #[derive(Debug)]
 pub struct Function<'a> {
-    name: parser::Identifier<'a>,
+    name: lexer::Identifier<'a>,
     instructions: Vec<Instruction<'a>>,
     stack_size: usize,
 }
 #[derive(Debug)]
-pub struct Program<'a>(Function<'a>);
+pub struct Program<'a>(Vec<Function<'a>>);
 
 fn gen_operand(val: tacky::Val) -> Operand {
     match val {
@@ -115,11 +115,11 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                     let dst = gen_operand(dst);
                     asm_instructions.extend([
                         Instruction::Cmp {
-                            src1: Operand::Imm(Constant("0")),
+                            src1: Operand::Imm(lexer::Constant("0")),
                             src2: gen_operand(src),
                         },
                         Instruction::Move {
-                            src: Operand::Imm(Constant("0")),
+                            src: Operand::Imm(lexer::Constant("0")),
                             dst: dst.clone(),
                         },
                         Instruction::SetCC {
@@ -227,7 +227,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                                     src2: gen_operand(src1),
                                 },
                                 Instruction::Move {
-                                    src: Operand::Imm(Constant("0")),
+                                    src: Operand::Imm(lexer::Constant("0")),
                                     dst: dst.clone(),
                                 },
                                 Instruction::SetCC {
@@ -251,7 +251,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
             tacky::Instruction::JumpIfZero { condition, target } => {
                 asm_instructions.extend([
                     Instruction::Cmp {
-                        src1: Operand::Imm(Constant("0")),
+                        src1: Operand::Imm(lexer::Constant("0")),
                         src2: gen_operand(condition),
                     },
                     Instruction::JmpCC {
@@ -263,7 +263,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
             tacky::Instruction::JumpIfNotZero { condition, target } => {
                 asm_instructions.extend([
                     Instruction::Cmp {
-                        src1: Operand::Imm(Constant("0")),
+                        src1: Operand::Imm(lexer::Constant("0")),
                         src2: gen_operand(condition),
                     },
                     Instruction::JmpCC {
@@ -289,8 +289,13 @@ fn gen_function(function: tacky::Function) -> Function {
 }
 
 pub fn gen_program(program: tacky::Program) -> Program {
-    let tacky::Program(function) = program;
-    Program(gen_function(function))
+    let tacky::Program(functions) = program;
+    Program(
+        functions
+            .into_iter()
+            .map(|function| gen_function(function))
+            .collect(),
+    )
 }
 
 fn rewrite_operand_to_eliminate_psedo<'a>(
@@ -358,8 +363,13 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
 }
 
 pub fn rewrite_program_to_eliminate_psedo(program: Program) -> Program {
-    let Program(function) = program;
-    Program(rewrite_function_to_eliminate_psedo(function))
+    let Program(functions) = program;
+    Program(
+        functions
+            .into_iter()
+            .map(|function| rewrite_function_to_eliminate_psedo(function))
+            .collect(),
+    )
 }
 
 fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
@@ -477,8 +487,13 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
 }
 
 pub fn rewrite_program_to_fixup_instructions(program: Program) -> Program {
-    let Program(function) = program;
-    Program(rewrite_function_to_fixup_instructions(function))
+    let Program(functions) = program;
+    Program(
+        functions
+            .into_iter()
+            .map(|function| rewrite_function_to_fixup_instructions(function))
+            .collect(),
+    )
 }
 
 #[derive(Debug)]
@@ -638,9 +653,11 @@ fn emit_function(function: Function) -> Vec<Fragment> {
 
 pub fn emit_program(program: Program) -> Vec<Fragment> {
     let mut text = Vec::new();
-    let Program(function) = program;
+    let Program(functions) = program;
 
-    text.extend(emit_function(function));
+    for function in functions {
+        text.extend(emit_function(function));
+    }
     text.push(Fragment::Str("\n.section .note.GNU-stack,\"\",@progbits\n"));
 
     text

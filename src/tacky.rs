@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 
-use crate::parser::{self, Constant, Declaration};
+use crate::{
+    lexer,
+    parser,
+};
 
 #[derive(Debug, Clone)]
 pub enum Val<'a> {
-    Constant(parser::Constant<'a>),
+    Constant(lexer::Constant<'a>),
     Tmp(usize),
 }
 
@@ -67,11 +70,12 @@ pub enum Instruction<'a> {
 
 #[derive(Debug)]
 pub struct Function<'a> {
-    pub name: parser::Identifier<'a>,
+    pub name: lexer::Identifier<'a>,
     pub instructions: Vec<Instruction<'a>>,
 }
+
 #[derive(Debug)]
-pub struct Program<'a>(pub Function<'a>);
+pub struct Program<'a>(pub Vec<Function<'a>>);
 
 pub struct Context {
     last_tmp_index: usize,
@@ -236,7 +240,7 @@ fn gen_val<'a, 'b>(
                     target: is_false.clone(),
                 });
                 src1_instructions.push(Instruction::Copy {
-                    src: Val::Constant(Constant("1")),
+                    src: Val::Constant(lexer::Constant("1")),
                     dst: dst.clone(),
                 });
                 src1_instructions.push(Instruction::Jump {
@@ -244,7 +248,7 @@ fn gen_val<'a, 'b>(
                 });
                 src1_instructions.push(Instruction::Label(is_false));
                 src1_instructions.push(Instruction::Copy {
-                    src: Val::Constant(Constant("0")),
+                    src: Val::Constant(lexer::Constant("0")),
                     dst: dst.clone(),
                 });
                 src1_instructions.push(Instruction::Label(end));
@@ -279,7 +283,7 @@ fn gen_val<'a, 'b>(
                     target: is_true.clone(),
                 });
                 src1_instructions.push(Instruction::Copy {
-                    src: Val::Constant(Constant("0")),
+                    src: Val::Constant(lexer::Constant("0")),
                     dst: dst.clone(),
                 });
                 src1_instructions.push(Instruction::Jump {
@@ -287,7 +291,7 @@ fn gen_val<'a, 'b>(
                 });
                 src1_instructions.push(Instruction::Label(is_true));
                 src1_instructions.push(Instruction::Copy {
-                    src: Val::Constant(Constant("1")),
+                    src: Val::Constant(lexer::Constant("1")),
                     dst: dst.clone(),
                 });
                 src1_instructions.push(Instruction::Label(end));
@@ -350,6 +354,7 @@ fn gen_val<'a, 'b>(
 
             (dst, condition_instructions)
         }
+        parser::Expression::FunctionCall { func, args } => todo!(),
     }
 }
 
@@ -461,7 +466,9 @@ fn gen_statement<'a, 'b>(
             label,
         } => {
             let mut instructions = match for_init {
-                parser::ForInit::InitDecl(declaration) => gen_declaration(declaration, context),
+                parser::ForInit::InitDecl(declaration) => {
+                    gen_variable_declaration(declaration, context)
+                }
                 parser::ForInit::InitExp(expression) => {
                     let (_, init_instructions) = gen_val(expression, context);
                     init_instructions
@@ -499,11 +506,11 @@ fn gen_statement<'a, 'b>(
     }
 }
 
-fn gen_declaration<'a, 'b>(
-    declaration: parser::Declaration<'a>,
+fn gen_variable_declaration<'a, 'b>(
+    declaration: parser::VariableDeclaration<'a>,
     context: &'b mut Context,
 ) -> Vec<Instruction<'a>> {
-    let Declaration { var, expression } = declaration;
+    let parser::VariableDeclaration { var, expression } = declaration;
 
     if let Some(expression) = expression {
         let (src, mut instructions) = gen_val(expression, context);
@@ -523,26 +530,47 @@ fn gen_block<'a, 'b>(block: parser::Block<'a>, context: &'b mut Context) -> Vec<
             parser::BlockItem::Statement(statement) => {
                 instructions.extend(gen_statement(statement, context));
             }
-            parser::BlockItem::Declaration(declaration) => {
-                instructions.extend(gen_declaration(declaration, context));
-            }
+            parser::BlockItem::Declaration(declaration) => match declaration {
+                parser::Declaration::VariableDeclaration(variable_declaration) => {
+                    instructions.extend(gen_variable_declaration(variable_declaration, context))
+                }
+                parser::Declaration::FunctionDeclaration(function_declaration) => todo!(),
+            },
         }
     }
 
     instructions
 }
 
-fn gen_function<'a, 'b>(function: parser::Function<'a>, context: &'b mut Context) -> Function<'a> {
-    let parser::Function { body, name } = function;
+fn maybe_gen_function<'a, 'b>(
+    function: parser::FunctionDeclaration<'a>,
+    context: &'b mut Context,
+) -> Option<Function<'a>> {
+    let parser::FunctionDeclaration { body, .. } = function;
 
-    let mut instructions = Vec::new();
-    instructions.extend(gen_block(body, context));
-    instructions.push(Instruction::Return(Val::Constant(Constant("0"))));
+    if let Some(body) = body {
+        let mut instructions = Vec::new();
+        instructions.extend(gen_block(body, context));
+        instructions.push(Instruction::Return(Val::Constant(lexer::Constant("0"))));
 
-    Function { name, instructions }
+        Some(Function {
+            name: lexer::Identifier("main"),
+            instructions,
+        })
+    } else {
+        None
+    }
 }
 
 pub fn gen_program<'a, 'b>(program: parser::Program<'a>, context: &'b mut Context) -> Program<'a> {
-    let parser::Program(function) = program;
-    Program(gen_function(function, context))
+    let parser::Program(function_declarations) = program;
+    let mut functions = Vec::new();
+
+    for function_declaration in function_declarations {
+        if let Some(function_declaration) = maybe_gen_function(function_declaration, context) {
+            functions.push(function_declaration);
+        }
+    }
+
+    Program(functions)
 }
