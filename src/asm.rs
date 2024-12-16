@@ -81,7 +81,7 @@ pub enum Instruction<'a> {
 
 #[derive(Debug)]
 pub struct Function<'a> {
-    func: parser::Func<'a>,
+    name: &'a str,
     instructions: Vec<Instruction<'a>>,
     stack_size: usize,
 }
@@ -270,6 +270,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 ]);
             }
             tacky::Instruction::Label(label) => asm_instructions.push(Instruction::Label(label)),
+            tacky::Instruction::Call { name, args, result } => todo!(),
         }
     }
 
@@ -277,9 +278,11 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
 }
 
 fn gen_function(function: tacky::Function) -> Function {
-    let tacky::Function { instructions, func } = function;
+    let tacky::Function {
+        instructions, name, ..
+    } = function;
     Function {
-        func,
+        name,
         instructions: gen_instructions(instructions),
         stack_size: 0,
     }
@@ -317,7 +320,9 @@ fn rewrite_operand_to_eliminate_psedo<'a>(
 
 fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     let Function {
-        instructions, func, ..
+        instructions,
+        name: func,
+        ..
     } = function;
     let mut rewritten_instructions = Vec::new();
     let mut stack = HashMap::new();
@@ -353,7 +358,7 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     }
 
     Function {
-        func,
+        name: func,
         instructions: rewritten_instructions,
         stack_size: stack.len() * 4,
     }
@@ -372,7 +377,7 @@ pub fn rewrite_program_to_eliminate_psedo(program: Program) -> Program {
 fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     let Function {
         instructions,
-        func,
+        name: func,
         stack_size,
     } = function;
     let mut rewritten_instructions = Vec::new();
@@ -477,7 +482,7 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     }
 
     Function {
-        func,
+        name: func,
         instructions: rewritten_instructions,
         stack_size,
     }
@@ -625,16 +630,16 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
 
 fn emit_function(function: Function) -> Vec<Fragment> {
     let Function {
-        func,
+        name,
         instructions,
         stack_size,
     } = function;
     let mut text = Vec::new();
 
     text.push(Fragment::Str("\t.globl "));
-    text.push(Fragment::Str(func.0));
+    text.push(Fragment::Str(name));
     text.push(Fragment::Str("\n"));
-    text.push(Fragment::Str(func.0));
+    text.push(Fragment::Str(name));
     text.push(Fragment::Str(":\n"));
 
     text.push(Fragment::Str("\tpushq %rbp\n"));

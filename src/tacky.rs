@@ -63,11 +63,17 @@ pub enum Instruction<'a> {
         target: Label,
     },
     Label(Label),
+    Call {
+        name: &'a str,
+        args: Vec<Val<'a>>,
+        result: Val<'a>,
+    },
 }
 
 #[derive(Debug)]
 pub struct Function<'a> {
-    pub func: parser::Func<'a>,
+    pub name: &'a str,
+    pub params: Vec<Val<'a>>,
     pub instructions: Vec<Instruction<'a>>,
 }
 
@@ -351,7 +357,25 @@ fn gen_val<'a, 'b>(
 
             (dst, condition_instructions)
         }
-        parser::Expression::FunctionCall { func, args } => todo!(),
+        parser::Expression::FunctionCall { func, args } => {
+            let mut instructions = Vec::new();
+            let args = args
+                .into_iter()
+                .map(|arg| {
+                    let (arg, arg_instructions) = gen_val(arg, context);
+                    instructions.extend(arg_instructions);
+                    arg
+                })
+                .collect();
+            let result = context.next_tmp();
+            instructions.push(Instruction::Call {
+                name: func.0,
+                args,
+                result: result.clone(),
+            });
+
+            (result, instructions)
+        }
     }
 }
 
@@ -553,7 +577,16 @@ fn maybe_gen_function<'a, 'b>(
             instructions.extend(gen_block(body, context));
             instructions.push(Instruction::Return(Val::Constant(lexer::Constant("0"))));
 
-            Some(Function { func, instructions })
+            let params = params
+                .into_iter()
+                .map(|param| context.resolve_parser_var(&param))
+                .collect();
+
+            Some(Function {
+                name: func.0,
+                params,
+                instructions,
+            })
         }
     }
 }
