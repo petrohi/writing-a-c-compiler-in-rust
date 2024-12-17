@@ -67,6 +67,7 @@ pub enum Instruction<'a> {
         name: &'a str,
         args: Vec<Val<'a>>,
         result: Val<'a>,
+        non_local: bool,
     },
 }
 
@@ -372,6 +373,7 @@ fn gen_val<'a, 'b>(
                 name: func.0,
                 args,
                 result: result.clone(),
+                non_local: true,
             });
 
             (result, instructions)

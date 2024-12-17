@@ -1,13 +1,25 @@
-use std::collections::HashMap;
+use std::{cmp::min, collections::HashMap};
 
-use crate::{lexer, parser, tacky};
+use crate::{lexer, tacky};
 
 #[derive(Clone, Debug)]
 pub enum Register {
     Ax,
     Dx,
+    Cx,
+    Di,
+    Si,
+    R8,
+    R9,
     R10,
     R11,
+}
+
+#[derive(Clone, Debug)]
+pub enum OperandSize {
+    _1B,
+    _8B,
+    _4B,
 }
 
 #[derive(Clone, Debug)]
@@ -15,7 +27,7 @@ pub enum Operand<'a> {
     Imm(lexer::Constant<'a>),
     Register(Register),
     Pseudo(usize),
-    Stack(usize),
+    Stack(isize),
 }
 
 #[derive(Clone, Debug)]
@@ -77,16 +89,35 @@ pub enum Instruction<'a> {
         operand: Operand<'a>,
     },
     Label(tacky::Label),
+    Push(Operand<'a>),
+    AllocateStack(usize),
+    DeallocateStack(usize),
+    Call {
+        name: &'a str,
+        plt: bool,
+    },
 }
 
 #[derive(Debug)]
 pub struct Function<'a> {
     name: &'a str,
     instructions: Vec<Instruction<'a>>,
-    stack_size: usize,
 }
 #[derive(Debug)]
 pub struct Program<'a>(Vec<Function<'a>>);
+
+fn align_stack(size: usize) -> usize {
+    ((size + 15) / 16) * 16
+}
+
+const ARG_REGISTERS: [Register; 6] = [
+    Register::Di,
+    Register::Si,
+    Register::Dx,
+    Register::Cx,
+    Register::R8,
+    Register::R9,
+];
 
 fn gen_operand(val: tacky::Val) -> Operand {
     match val {
@@ -270,7 +301,53 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                 ]);
             }
             tacky::Instruction::Label(label) => asm_instructions.push(Instruction::Label(label)),
-            tacky::Instruction::Call { name, args, result } => todo!(),
+            tacky::Instruction::Call {
+                name,
+                args,
+                result,
+                non_local,
+            } => {
+                let (register_args, stack_args) =
+                    args.split_at(min(ARG_REGISTERS.len(), args.len()));
+
+                let unaligned_stack_size = stack_args.len() * 8;
+                let stack_size = align_stack(unaligned_stack_size);
+                let stack_padding = stack_size - unaligned_stack_size;
+
+                if stack_padding != 0 {
+                    asm_instructions.push(Instruction::AllocateStack(stack_padding));
+                }
+
+                for (i, arg) in register_args.into_iter().enumerate() {
+                    let arg = gen_operand(arg.clone());
+
+                    asm_instructions.push(Instruction::Move {
+                        src: arg,
+                        dst: Operand::Register(ARG_REGISTERS[i].clone()),
+                    })
+                }
+
+                for arg in stack_args.into_iter().rev() {
+                    let arg = gen_operand(arg.clone());
+
+                    asm_instructions.push(Instruction::Push(arg))
+                }
+
+                asm_instructions.push(Instruction::Call {
+                    name,
+                    plt: non_local,
+                });
+
+                if stack_size != 0 {
+                    asm_instructions.push(Instruction::DeallocateStack(stack_size));
+                };
+
+                let result = gen_operand(result);
+                asm_instructions.push(Instruction::Move {
+                    src: Operand::Register(Register::Ax),
+                    dst: result,
+                });
+            }
         }
     }
 
@@ -279,13 +356,31 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
 
 fn gen_function(function: tacky::Function) -> Function {
     let tacky::Function {
-        instructions, name, ..
-    } = function;
-    Function {
+        instructions: function_instructions,
         name,
-        instructions: gen_instructions(instructions),
-        stack_size: 0,
+        params,
+    } = function;
+    let mut instructions = Vec::new();
+
+    for (i, param) in params.into_iter().enumerate() {
+        let param = gen_operand(param);
+
+        if i < ARG_REGISTERS.len() {
+            instructions.push(Instruction::Move {
+                src: Operand::Register(ARG_REGISTERS[i].clone()),
+                dst: param,
+            })
+        } else {
+            instructions.push(Instruction::Move {
+                src: Operand::Stack(((i - ARG_REGISTERS.len()) * 8 + 16) as isize),
+                dst: param,
+            })
+        }
     }
+
+    instructions.extend(gen_instructions(function_instructions));
+
+    Function { name, instructions }
 }
 
 pub fn gen_program(program: tacky::Program) -> Program {
@@ -312,7 +407,7 @@ fn rewrite_operand_to_eliminate_psedo<'a>(
                 position
             };
 
-            Operand::Stack(position)
+            Operand::Stack(-(position as isize))
         }
         o => o,
     }
@@ -353,14 +448,18 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
                 condition,
                 operand: rewrite_operand_to_eliminate_psedo(operand, &mut stack),
             },
+            Instruction::Push(operand) => {
+                Instruction::Push(rewrite_operand_to_eliminate_psedo(operand, &mut stack))
+            }
             i => i,
         });
     }
 
+    rewritten_instructions.insert(0, Instruction::AllocateStack(align_stack(stack.len() * 4)));
+
     Function {
         name: func,
         instructions: rewritten_instructions,
-        stack_size: stack.len() * 4,
     }
 }
 
@@ -378,7 +477,6 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     let Function {
         instructions,
         name: func,
-        stack_size,
     } = function;
     let mut rewritten_instructions = Vec::new();
 
@@ -477,6 +575,17 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
                 _ => rewritten_instructions.push(instruction),
             },
 
+            Instruction::Push(ref operand) => match operand {
+                Operand::Stack(_) | Operand::Imm(_) => rewritten_instructions.extend([
+                    Instruction::Move {
+                        src: operand.clone(),
+                        dst: Operand::Register(Register::Ax),
+                    },
+                    Instruction::Push(Operand::Register(Register::Ax)),
+                ]),
+                _ => rewritten_instructions.push(instruction),
+            },
+
             _ => rewritten_instructions.push(instruction),
         }
     }
@@ -484,7 +593,6 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     Function {
         name: func,
         instructions: rewritten_instructions,
-        stack_size,
     }
 }
 
@@ -504,16 +612,46 @@ pub enum Fragment<'a> {
     String(String),
 }
 
-fn emit_register(register: Register) -> Fragment<'static> {
-    match register {
-        Register::Ax => Fragment::Str("%eax"),
-        Register::Dx => Fragment::Str("%edx"),
-        Register::R10 => Fragment::Str("%r10d"),
-        Register::R11 => Fragment::Str("%r11d"),
+fn emit_register(register: Register, size: OperandSize) -> Fragment<'static> {
+    match size {
+        OperandSize::_8B => match register {
+            Register::Ax => Fragment::Str("%rax"),
+            Register::Dx => Fragment::Str("%rdx"),
+            Register::Cx => Fragment::Str("%rcx"),
+            Register::Di => Fragment::Str("%rdi"),
+            Register::Si => Fragment::Str("%rsi"),
+            Register::R8 => Fragment::Str("%r8"),
+            Register::R9 => Fragment::Str("%r9"),
+            Register::R10 => Fragment::Str("%r10"),
+            Register::R11 => Fragment::Str("%r11"),
+        },
+
+        OperandSize::_4B => match register {
+            Register::Ax => Fragment::Str("%eax"),
+            Register::Dx => Fragment::Str("%edx"),
+            Register::Cx => Fragment::Str("%ecx"),
+            Register::Di => Fragment::Str("%edi"),
+            Register::Si => Fragment::Str("%esi"),
+            Register::R8 => Fragment::Str("%r8d"),
+            Register::R9 => Fragment::Str("%r9d"),
+            Register::R10 => Fragment::Str("%r10d"),
+            Register::R11 => Fragment::Str("%r11d"),
+        },
+        OperandSize::_1B => match register {
+            Register::Ax => Fragment::Str("%al"),
+            Register::Dx => Fragment::Str("%dl"),
+            Register::Cx => Fragment::Str("%cl"),
+            Register::Di => Fragment::Str("%dil"),
+            Register::Si => Fragment::Str("%sil"),
+            Register::R8 => Fragment::Str("%r8b"),
+            Register::R9 => Fragment::Str("%r9b"),
+            Register::R10 => Fragment::Str("%r10b"),
+            Register::R11 => Fragment::Str("%r11b"),
+        },
     }
 }
 
-fn emit_operand(operand: Operand) -> Vec<Fragment> {
+fn emit_operand(operand: Operand, size: OperandSize) -> Vec<Fragment> {
     let mut text = Vec::new();
     match operand {
         Operand::Imm(constant) => {
@@ -521,8 +659,8 @@ fn emit_operand(operand: Operand) -> Vec<Fragment> {
             text.push(Fragment::Str(constant.0));
         }
 
-        Operand::Register(register) => text.push(emit_register(register)),
-        Operand::Stack(position) => text.push(Fragment::String(format!("-{}(%rbp)", position))),
+        Operand::Register(register) => text.push(emit_register(register, size)),
+        Operand::Stack(position) => text.push(Fragment::String(format!("{}(%rbp)", position))),
         Operand::Pseudo(_) => panic!("Pseudo operand"),
     }
 
@@ -565,9 +703,9 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
     match instruction {
         Instruction::Move { src, dst } => {
             text.push(Fragment::Str("\tmovl "));
-            text.extend(emit_operand(src));
+            text.extend(emit_operand(src, OperandSize::_4B));
             text.push(Fragment::Str(", "));
-            text.extend(emit_operand(dst));
+            text.extend(emit_operand(dst, OperandSize::_4B));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Ret => {
@@ -577,26 +715,26 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
         }
         Instruction::Unary { operator, dst } => {
             text.push(emit_unary_mnemonic(operator));
-            text.extend(emit_operand(dst));
+            text.extend(emit_operand(dst, OperandSize::_4B));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Binary { operator, src, dst } => {
             text.push(emit_binary_mnemonic(operator));
-            text.extend(emit_operand(src));
+            text.extend(emit_operand(src, OperandSize::_4B));
             text.push(Fragment::Str(", "));
-            text.extend(emit_operand(dst));
+            text.extend(emit_operand(dst, OperandSize::_4B));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Cmp { src1, src2 } => {
             text.push(Fragment::Str("\tcmpl "));
-            text.extend(emit_operand(src1));
+            text.extend(emit_operand(src1, OperandSize::_4B));
             text.push(Fragment::Str(", "));
-            text.extend(emit_operand(src2));
+            text.extend(emit_operand(src2, OperandSize::_4B));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Idiv { operand } => {
             text.push(Fragment::Str("\tidivl "));
-            text.extend(emit_operand(operand));
+            text.extend(emit_operand(operand, OperandSize::_4B));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Cdq => text.push(Fragment::Str("\tcdq\n")),
@@ -616,12 +754,31 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
             text.push(Fragment::Str("\tset"));
             text.push(emit_condition(condition));
             text.push(Fragment::Str(" "));
-            text.extend(emit_operand(operand));
+            text.extend(emit_operand(operand, OperandSize::_1B));
             text.push(Fragment::Str("\n"));
         }
         Instruction::Label(label) => {
             text.push(emit_label(label));
             text.push(Fragment::Str(":\n"));
+        }
+        Instruction::Push(operand) => {
+            text.push(Fragment::Str("\tpushq "));
+            text.extend(emit_operand(operand, OperandSize::_8B));
+            text.push(Fragment::Str("\n"));
+        }
+        Instruction::AllocateStack(stack_size) => {
+            text.push(Fragment::String(format!("\tsubq ${}, %rsp\n", stack_size)))
+        }
+        Instruction::DeallocateStack(stack_size) => {
+            text.push(Fragment::String(format!("\taddq ${}, %rsp\n", stack_size)))
+        }
+        Instruction::Call { name, plt } => {
+            text.push(Fragment::Str("\tcall "));
+            text.push(Fragment::Str(name));
+            if plt {
+                text.push(Fragment::Str("@PLT"));
+            }
+            text.push(Fragment::Str("\n"));
         }
     }
 
@@ -629,11 +786,7 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
 }
 
 fn emit_function(function: Function) -> Vec<Fragment> {
-    let Function {
-        name,
-        instructions,
-        stack_size,
-    } = function;
+    let Function { name, instructions } = function;
     let mut text = Vec::new();
 
     text.push(Fragment::Str("\t.globl "));
@@ -644,7 +797,6 @@ fn emit_function(function: Function) -> Vec<Fragment> {
 
     text.push(Fragment::Str("\tpushq %rbp\n"));
     text.push(Fragment::Str("\tmovq %rsp, %rbp\n"));
-    text.push(Fragment::String(format!("\tsubq ${}, %rsp\n", stack_size)));
 
     for instruction in instructions {
         text.extend(emit_instruction(instruction));

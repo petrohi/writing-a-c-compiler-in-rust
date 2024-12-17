@@ -23,6 +23,8 @@ struct Cli {
     tacky: bool,
     #[clap(long, action)]
     codegen: bool,
+    #[clap(short, action)]
+    compile_only: bool,
 }
 
 impl Cli {
@@ -123,19 +125,38 @@ fn main() {
                                     let asm_file = File::create(&asm_path).unwrap();
                                     write_asm_fragments(&mut &asm_file, &asm_fragments);
 
-                                    let exe_path = source_path
-                                        .parent()
-                                        .unwrap()
-                                        .join(source_path.file_stem().unwrap());
+                                    if args.compile_only {
+                                        let obj_path = source_path
+                                            .parent()
+                                            .unwrap()
+                                            .join(source_path.file_stem().unwrap())
+                                            .with_extension("o");
 
-                                    if !run_gcc([
-                                        asm_path.to_str().unwrap(),
-                                        "-o",
-                                        exe_path.to_str().unwrap(),
-                                    ])
-                                    .success()
-                                    {
-                                        panic!("Assembly compilation failed")
+                                        if !run_gcc([
+                                            "-c",
+                                            asm_path.to_str().unwrap(),
+                                            "-o",
+                                            obj_path.to_str().unwrap(),
+                                        ])
+                                        .success()
+                                        {
+                                            panic!("Assembly compilation failed")
+                                        }
+                                    } else {
+                                        let exe_path = source_path
+                                            .parent()
+                                            .unwrap()
+                                            .join(source_path.file_stem().unwrap());
+
+                                        if !run_gcc([
+                                            asm_path.to_str().unwrap(),
+                                            "-o",
+                                            exe_path.to_str().unwrap(),
+                                        ])
+                                        .success()
+                                        {
+                                            panic!("Assembly compilation failed")
+                                        }
                                     }
                                 }
                             }
