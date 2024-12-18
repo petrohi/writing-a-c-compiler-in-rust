@@ -17,6 +17,8 @@ pub enum Token<'a> {
     For,
     Break,
     Continue,
+    Static,
+    Extern,
     Identifier(Identifier<'a>),
     Constant(Constant<'a>),
     OParen,
@@ -131,6 +133,22 @@ pub fn lex(source: &String) -> Vec<Token> {
         RegexTokenizer {
             regex: "(?<continue>continue\\b)",
             match_to_token: |_| Token::Continue,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "static",
+        RegexTokenizer {
+            regex: "(?<static>static\\b)",
+            match_to_token: |_| Token::Static,
+        },
+    ));
+
+    regex_tokenizers.push((
+        "extern",
+        RegexTokenizer {
+            regex: "(?<extern>extern\\b)",
+            match_to_token: |_| Token::Extern,
         },
     ));
 
