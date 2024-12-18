@@ -748,12 +748,62 @@ fn parse_statement<'a>(
     }
 }
 
-fn parse_declaration<'a>(
+fn maybe_parse_declaration<'a>(
     tokens: &mut Vec<lexer::Token<'a>>,
     context: &mut Context<'a>,
-) -> Declaration<'a> {
-    if let lexer::Token::Int = pop_token(tokens) {
-        if let lexer::Token::Identifier(identifier) = pop_token(tokens) {
+) -> Option<Declaration<'a>> {
+    let mut specifier_tokens = Vec::new();
+
+    loop {
+        match peek_token(tokens) {
+            lexer::Token::Int | lexer::Token::Extern | lexer::Token::Static => {
+                specifier_tokens.push(pop_token(tokens))
+            }
+            _ => break,
+        }
+    }
+
+    if !specifier_tokens.is_empty() {
+        let int_count = specifier_tokens
+            .iter()
+            .filter(|t| {
+                if let lexer::Token::Int = t {
+                    true
+                } else {
+                    false
+                }
+            })
+            .count();
+        let extern_count = specifier_tokens
+            .iter()
+            .filter(|t| {
+                if let lexer::Token::Extern = t {
+                    true
+                } else {
+                    false
+                }
+            })
+            .count();
+        let static_count = specifier_tokens
+            .iter()
+            .filter(|t| {
+                if let lexer::Token::Static = t {
+                    true
+                } else {
+                    false
+                }
+            })
+            .count();
+
+        if !(int_count == 1
+            && ((extern_count == 0 && static_count == 0)
+                || (extern_count == 1 && static_count == 0)
+                || (extern_count == 0 && static_count == 1)))
+        {
+            panic!("Expected int with optional static or extern");
+        }
+
+        let declaration = if let lexer::Token::Identifier(identifier) = pop_token(tokens) {
             if let lexer::Token::OParen = peek_token(tokens) {
                 _ = pop_token(tokens);
 
@@ -831,18 +881,9 @@ fn parse_declaration<'a>(
             }
         } else {
             panic!("Expected <identifier>");
-        }
-    } else {
-        panic!("Expected int")
-    }
-}
+        };
 
-fn maybe_parse_declaration<'a>(
-    tokens: &mut Vec<lexer::Token<'a>>,
-    context: &mut Context<'a>,
-) -> Option<Declaration<'a>> {
-    if let lexer::Token::Int = peek_token(tokens) {
-        Some(parse_declaration(tokens, context))
+        Some(declaration)
     } else {
         None
     }
@@ -865,11 +906,15 @@ pub fn parse_program<'a>(
     tokens: &mut Vec<lexer::Token<'a>>,
     context: &mut Context<'a>,
 ) -> Program<'a> {
-    let mut function_declarations = Vec::new();
+    let mut declarations = Vec::new();
 
     while !tokens.is_empty() {
-        function_declarations.push(parse_declaration(tokens, context));
+        if let Some(declaration) = maybe_parse_declaration(tokens, context) {
+            declarations.push(declaration);
+        } else {
+            panic!("Expected <declaration>")
+        }
     }
 
-    Program(function_declarations)
+    Program(declarations)
 }
