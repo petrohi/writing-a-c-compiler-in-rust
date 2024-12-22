@@ -101,7 +101,7 @@ fn main() {
                         if args.do_tacky() {
                             let mut tacky_context = tacky::Context::new();
                             let tacky_program =
-                                tacky::gen_program(parsed_program, &mut tacky_context);
+                                tacky::gen_program(parsed_program, &mut tacky_context, &parser_context);
                             //dbg!(&tacky_program);
 
                             if args.do_codegen() {

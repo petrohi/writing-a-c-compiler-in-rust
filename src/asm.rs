@@ -123,6 +123,7 @@ fn gen_operand(val: tacky::Val) -> Operand {
     match val {
         tacky::Val::Constant(constant) => Operand::Imm(constant),
         tacky::Val::Tmp(index) => Operand::Pseudo(index),
+        tacky::Val::Data(_) => todo!(),
     }
 }
 
@@ -359,6 +360,7 @@ fn gen_function(function: tacky::Function) -> Function {
         instructions: function_instructions,
         name,
         params,
+        global,
     } = function;
     let mut instructions = Vec::new();
 
@@ -384,11 +386,14 @@ fn gen_function(function: tacky::Function) -> Function {
 }
 
 pub fn gen_program(program: tacky::Program) -> Program {
-    let tacky::Program(functions) = program;
+    let tacky::Program(top_level_items) = program;
     Program(
-        functions
+        top_level_items
             .into_iter()
-            .map(|function| gen_function(function))
+            .map(|item| match item {
+                tacky::TopLevelItem::Function(function) => gen_function(function),
+                tacky::TopLevelItem::StaticVar(static_var) => todo!(),
+            })
             .collect(),
     )
 }

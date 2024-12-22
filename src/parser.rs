@@ -27,7 +27,7 @@ pub enum BinaryOperator {
 }
 
 #[derive(Clone)]
-pub enum InitialValue<'a> {
+enum InitialValue<'a> {
     Tentative,
     Init(Option<&'a str>),
     InitZero,
@@ -35,12 +35,12 @@ pub enum InitialValue<'a> {
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub enum SymbolKey<'a> {
+enum SymbolKey<'a> {
     NoLinkage(usize),
     Linkage(&'a str),
 }
 
-pub enum Symbol<'a> {
+enum Symbol<'a> {
     Func {
         arity: usize,
         defined: bool,
@@ -76,6 +76,12 @@ fn identifier_to_symbol_key<'a>(identifier: &Identifier<'a>) -> SymbolKey<'a> {
     }
 }
 
+pub struct StaticVar<'a> {
+    pub name: String,
+    pub global: bool,
+    pub init: &'a str,
+}
+
 impl<'a> Context<'a> {
     pub fn new(validate: bool) -> Context<'a> {
         Context {
@@ -87,6 +93,46 @@ impl<'a> Context<'a> {
             break_scopes: Vec::new(),
             continue_scopes: Vec::new(),
         }
+    }
+
+    pub fn is_global_function(self: &Self, func: &Func) -> bool {
+        let symbol_key = identifier_to_symbol_key(&Identifier::Func(func.clone()));
+        self.symbols.contains_key(&symbol_key)
+    }
+
+    pub fn get_static_vars(self: &Self) -> Vec<StaticVar<'a>> {
+        let mut static_vars = Vec::new();
+
+        for (key, symbol) in self.symbols.iter() {
+            match symbol {
+                Symbol::Static {
+                    initial_value,
+                    global,
+                } => {
+                    let name = match key {
+                        SymbolKey::NoLinkage(index) => format!("static_{}", index),
+                        SymbolKey::Linkage(name) => (*name).to_owned(),
+                    };
+
+                    let init = match initial_value {
+                        InitialValue::Tentative | InitialValue::InitZero => Some("0"),
+                        InitialValue::Init(value) => Some(value.unwrap()),
+                        InitialValue::NoInit => None,
+                    };
+
+                    if let Some(init) = init {
+                        static_vars.push(StaticVar {
+                            name,
+                            global: *global,
+                            init,
+                        });
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        static_vars
     }
 
     fn push_var_scope(self: &mut Self) {

@@ -6,6 +6,7 @@ use crate::{lexer, parser};
 pub enum Val<'a> {
     Constant(lexer::Constant<'a>),
     Tmp(usize),
+    Data(&'a str),
 }
 
 #[derive(Debug, Clone)]
@@ -76,10 +77,24 @@ pub struct Function<'a> {
     pub name: &'a str,
     pub params: Vec<Val<'a>>,
     pub instructions: Vec<Instruction<'a>>,
+    pub global: bool,
 }
 
 #[derive(Debug)]
-pub struct Program<'a>(pub Vec<Function<'a>>);
+pub struct StaticVar<'a> {
+    pub name: String,
+    pub global: bool,
+    pub init: &'a str,
+}
+
+#[derive(Debug)]
+pub enum TopLevelItem<'a> {
+    Function(Function<'a>),
+    StaticVar(StaticVar<'a>),
+}
+
+#[derive(Debug)]
+pub struct Program<'a>(pub Vec<TopLevelItem<'a>>);
 
 pub struct Context {
     last_tmp_index: usize,
@@ -106,7 +121,7 @@ impl Context {
         tmp
     }
 
-    fn resolve_parser_var<'a, 'b>(self: &'a mut Self, var: &parser::Var) -> Val<'b> {
+    fn resolve_parser_var<'a, 'b>(self: &'a mut Self, var: &parser::Var<'b>) -> Val<'b> {
         match var {
             parser::Var::NoLinkage(index) => {
                 let index = index.unwrap();
@@ -120,7 +135,7 @@ impl Context {
                     Val::Tmp(tmp)
                 }
             }
-            parser::Var::Linkage(_) => todo!(),
+            parser::Var::Linkage(name) => Val::Data(name),
         }
     }
 
@@ -572,9 +587,10 @@ fn gen_block<'a, 'b>(block: parser::Block<'a>, context: &'b mut Context) -> Vec<
     instructions
 }
 
-fn maybe_gen_function<'a, 'b>(
+fn maybe_gen_function<'a, 'b, 'c>(
     declaration: parser::Declaration<'a>,
     context: &'b mut Context,
+    parser_context: &'c parser::Context,
 ) -> Option<Function<'a>> {
     match declaration {
         parser::Declaration::VariableDeclaration(_) => None,
@@ -594,20 +610,31 @@ fn maybe_gen_function<'a, 'b>(
                 name,
                 params,
                 instructions,
+                global: parser_context.is_global_function(&func),
             })
         }
     }
 }
 
-pub fn gen_program<'a, 'b>(program: parser::Program<'a>, context: &'b mut Context) -> Program<'a> {
+pub fn gen_program<'a, 'b, 'c>(
+    program: parser::Program<'a>,
+    context: &'b mut Context,
+    parser_context: &'c parser::Context<'a>,
+) -> Program<'a> {
     let parser::Program(function_declarations) = program;
-    let mut functions = Vec::new();
+    let mut top_level_items = Vec::new();
 
     for function_declaration in function_declarations {
-        if let Some(function_declaration) = maybe_gen_function(function_declaration, context) {
-            functions.push(function_declaration);
+        if let Some(function) = maybe_gen_function(function_declaration, context, parser_context) {
+            top_level_items.push(TopLevelItem::Function(function));
         }
     }
 
-    Program(functions)
+    for static_var in parser_context.get_static_vars() {
+        let parser::StaticVar { name, global, init } = static_var;
+
+        top_level_items.push(TopLevelItem::StaticVar(StaticVar { name, global, init }));
+    }
+
+    Program(top_level_items)
 }
