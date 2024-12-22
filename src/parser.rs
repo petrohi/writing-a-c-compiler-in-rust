@@ -26,19 +26,54 @@ pub enum BinaryOperator {
     Or,
 }
 
-struct FuncSignature {
-    arity: usize,
+#[derive(Clone)]
+pub enum InitialValue<'a> {
+    Tentative,
+    Init(Option<&'a str>),
+    InitZero,
+    NoInit,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub enum SymbolKey<'a> {
+    NoLinkage(usize),
+    Linkage(&'a str),
+}
+
+pub enum Symbol<'a> {
+    Func {
+        arity: usize,
+        defined: bool,
+        global: bool,
+    },
+    Static {
+        initial_value: InitialValue<'a>,
+        global: bool,
+    },
+    Local,
 }
 
 pub struct Context<'a> {
     validate: bool,
     last_var_index: usize,
-    func_signatures: HashMap<&'a str, FuncSignature>,
-    defined_funcs: HashSet<&'a str>,
-    id_scopes: Vec<HashMap<&'a str, Identifier>>,
+    symbols: HashMap<SymbolKey<'a>, Symbol<'a>>,
+    id_scopes: Vec<HashMap<&'a str, Identifier<'a>>>,
     last_label_index: usize,
     break_scopes: Vec<usize>,
     continue_scopes: Vec<usize>,
+}
+
+fn identifier_to_symbol_key<'a>(identifier: &Identifier<'a>) -> SymbolKey<'a> {
+    match identifier {
+        Identifier::Var(var) => match var {
+            Var::NoLinkage(index) => SymbolKey::NoLinkage(index.unwrap()),
+            Var::Linkage(name) => SymbolKey::Linkage(name),
+        },
+        Identifier::Func(func) => {
+            let Func(name) = func;
+            SymbolKey::Linkage(name)
+        }
+    }
 }
 
 impl<'a> Context<'a> {
@@ -47,8 +82,7 @@ impl<'a> Context<'a> {
             validate,
             last_var_index: 0,
             last_label_index: 0,
-            func_signatures: HashMap::new(),
-            defined_funcs: HashSet::new(),
+            symbols: HashMap::new(),
             id_scopes: vec![HashMap::new()],
             break_scopes: Vec::new(),
             continue_scopes: Vec::new(),
@@ -110,31 +144,238 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn declare_var(self: &mut Self, identifier: &lexer::Identifier<'a>) -> Var {
+    fn declare_or_define_var(
+        self: &mut Self,
+        lexical_identifier: &lexer::Identifier<'a>,
+        declaration_specification: DeclarationSpecification,
+        defined: bool,
+        for_init: bool,
+    ) -> Var<'a> {
         if self.validate {
-            let scope = self.id_scopes.last_mut().unwrap();
-            if scope.contains_key(identifier.0) {
-                panic!("Identifier is already declared");
-            }
+            if self.id_scopes.len() == 1 {
+                let var = Var::Linkage(lexical_identifier.0);
+                let identifier = Identifier::Var(var.clone());
+                let symbol_key = identifier_to_symbol_key(&identifier);
 
-            let var = Var(Some(self.last_var_index));
-            self.last_var_index += 1;
-            scope.insert(identifier.0, Identifier::Var(var.clone()));
-            var
+                let mut initial_value = if defined {
+                    InitialValue::Init(None)
+                } else {
+                    if let DeclarationSpecification::Extern = declaration_specification {
+                        InitialValue::NoInit
+                    } else {
+                        InitialValue::Tentative
+                    }
+                };
+
+                let mut global = if let DeclarationSpecification::Static = declaration_specification
+                {
+                    false
+                } else {
+                    true
+                };
+
+                match self.symbols.get(&symbol_key) {
+                    Some(Symbol::Static {
+                        initial_value: symbol_initial_value,
+                        global: symbol_global,
+                    }) => {
+                        if let DeclarationSpecification::Extern = declaration_specification {
+                            global = *symbol_global
+                        }
+
+                        if *symbol_global != global {
+                            panic!("Conflicting variable linkage")
+                        }
+
+                        match symbol_initial_value {
+                            InitialValue::Init(_) | InitialValue::InitZero => match initial_value {
+                                InitialValue::Init(_) | InitialValue::InitZero => {
+                                    panic!("Variable redefined");
+                                }
+                                _ => {
+                                    initial_value = symbol_initial_value.clone();
+                                }
+                            },
+                            InitialValue::Tentative => match initial_value {
+                                InitialValue::Init(_) | InitialValue::InitZero => (),
+                                _ => {
+                                    initial_value = symbol_initial_value.clone();
+                                }
+                            },
+                            InitialValue::NoInit => (),
+                        }
+                    }
+                    Some(_) => {
+                        panic!("Existing symbol redeclared as variable");
+                    }
+                    None => (),
+                }
+
+                self.symbols.insert(
+                    symbol_key,
+                    Symbol::Static {
+                        initial_value,
+                        global,
+                    },
+                );
+
+                match self.resolve_identifier(&lexical_identifier) {
+                    Some((Identifier::Func(_), _)) => panic!("Function redeclared as variable"),
+                    _ => {
+                        self.associate_identifiers_in_current_scope(
+                            &lexical_identifier,
+                            identifier,
+                        );
+                    }
+                }
+
+                var
+            } else {
+                let var = if let DeclarationSpecification::Extern = declaration_specification {
+                    Var::Linkage(lexical_identifier.0)
+                } else {
+                    let var = Var::NoLinkage(Some(self.last_var_index));
+                    self.last_var_index += 1;
+                    var
+                };
+                let identifier = Identifier::Var(var.clone());
+                let symbol_key = identifier_to_symbol_key(&identifier);
+
+                match declaration_specification {
+                    DeclarationSpecification::Extern => {
+                        if defined {
+                            panic!("Initializer on local extern variable");
+                        }
+
+                        match self.symbols.get(&symbol_key) {
+                            Some(Symbol::Static { .. }) => (),
+                            Some(_) => {
+                                panic!("Existing symbol redeclared as variable");
+                            }
+                            None => {
+                                self.symbols.insert(
+                                    symbol_key,
+                                    Symbol::Static {
+                                        initial_value: InitialValue::NoInit,
+                                        global: true,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    DeclarationSpecification::Static => {
+                        if for_init {
+                            panic!("Can't use static in for init");
+                        }
+
+                        let initial_value = if defined {
+                            InitialValue::Init(None)
+                        } else {
+                            InitialValue::InitZero
+                        };
+
+                        self.symbols.insert(
+                            symbol_key,
+                            Symbol::Static {
+                                initial_value,
+                                global: false,
+                            },
+                        );
+                    }
+                    DeclarationSpecification::None => {
+                        self.symbols.insert(symbol_key, Symbol::Local);
+                    }
+                }
+
+                match self.resolve_identifier(&lexical_identifier) {
+                    Some((Identifier::Func(_), true)) => panic!("Function redeclared as variable"),
+                    Some((Identifier::Var(var), true)) => {
+                        if let Var::Linkage(_) = var {
+                            match declaration_specification {
+                                DeclarationSpecification::Extern => (),
+                                _ => {
+                                    panic!("Conflicting variable declarations");
+                                }
+                            }
+                        } else {
+                            panic!("Conflicting variable declarations");
+                        }
+                    }
+                    _ => {
+                        self.associate_identifiers_in_current_scope(
+                            &lexical_identifier,
+                            identifier,
+                        );
+                    }
+                }
+
+                var
+            }
         } else {
-            Var(None)
+            Var::NoLinkage(None)
         }
     }
 
-    fn declare_func(
+    fn define_var_expression(
         self: &mut Self,
-        identifier: &lexer::Identifier<'a>,
+        identifier: &Identifier<'a>,
+        expression: &Expression<'a>,
+    ) {
+        if self.validate {
+            let symbol_key = identifier_to_symbol_key(identifier);
+            match self.symbols.get(&symbol_key) {
+                None | Some(Symbol::Local) => (),
+                Some(Symbol::Static {
+                    initial_value,
+                    global,
+                }) => {
+                    if let InitialValue::Init(None) = initial_value {
+                        if let Expression::Constant(lexer::Constant(value)) = expression {
+                            self.symbols.insert(
+                                symbol_key,
+                                Symbol::Static {
+                                    initial_value: InitialValue::Init(Some(*value)),
+                                    global: *global,
+                                },
+                            );
+                        } else {
+                            panic!("Non-constant initializer");
+                        }
+                    } else {
+                        panic!("Unexpected inital value");
+                    }
+                }
+                _ => panic!("Unexpected symbol"),
+            }
+        }
+    }
+
+    fn declare_or_define_func(
+        self: &mut Self,
+        lexical_identifier: &lexer::Identifier<'a>,
         param_identifiers: &Vec<lexer::Identifier<'a>>,
+        declaration_specification: DeclarationSpecification,
+        defined: bool,
     ) -> Func<'a> {
-        let func = Func(identifier.0);
+        let func = Func(lexical_identifier.0);
+        let identifier = Identifier::Func(func.clone());
+        let symbol_key = identifier_to_symbol_key(&identifier);
 
         if self.validate {
+            if defined && self.id_scopes.len() != 1 {
+                panic!("Nested function declaration not permitted");
+            }
+
             let arity = param_identifiers.len();
+            let mut global = if let DeclarationSpecification::Static = declaration_specification {
+                if self.id_scopes.len() != 1 {
+                    panic!("Can't declare static function on block scope");
+                }
+
+                false
+            } else {
+                true
+            };
             let mut unique_param_identifiers = HashSet::new();
 
             for param_identifier in param_identifiers {
@@ -143,22 +384,49 @@ impl<'a> Context<'a> {
                 }
             }
 
-            if let Some(func_signature) = self.func_signatures.get(identifier.0) {
-                if func_signature.arity != arity {
-                    panic!("Function redeclared with different signature");
+            let mut defined = defined;
+
+            match self.symbols.get(&symbol_key) {
+                Some(Symbol::Func {
+                    arity: symbol_arity,
+                    defined: symbol_defined,
+                    global: symbol_global,
+                }) => {
+                    if defined && *symbol_defined {
+                        panic!("Function redefined");
+                    }
+
+                    if *symbol_arity != arity {
+                        panic!("Function redeclared with different arity");
+                    }
+
+                    if *symbol_global && !global {
+                        panic!("Static function declaration is followed by non-static")
+                    }
+
+                    global = *symbol_global;
+                    defined = defined || *symbol_defined;
                 }
-            } else {
-                self.func_signatures
-                    .insert(identifier.0, FuncSignature { arity });
+                Some(_) => {
+                    panic!("Existing symbol redeclared as function");
+                }
+                None => (),
             }
 
-            let scope = self.id_scopes.last_mut().unwrap();
+            self.symbols.insert(
+                symbol_key,
+                Symbol::Func {
+                    arity,
+                    defined,
+                    global,
+                },
+            );
 
-            match scope.get(identifier.0) {
-                Some(Identifier::Func) => (),
-                Some(Identifier::Var(_)) => panic!("Variable redefined as function"),
-                None => {
-                    scope.insert(identifier.0, Identifier::Func);
+            match self.resolve_identifier(&lexical_identifier) {
+                Some((Identifier::Func(_), true)) => (),
+                Some((Identifier::Var(_), true)) => panic!("Variable redeclared as function"),
+                _ => {
+                    self.associate_identifiers_in_current_scope(&lexical_identifier, identifier);
                 }
             }
         }
@@ -166,31 +434,14 @@ impl<'a> Context<'a> {
         func
     }
 
-    fn define_func(
-        self: &mut Self,
-        identifier: &lexer::Identifier<'a>,
-        param_identifiers: &Vec<lexer::Identifier<'a>>,
-    ) -> Func<'a> {
-        let func = self.declare_func(identifier, param_identifiers);
-
+    fn get_var(self: &Self, identifier: &lexer::Identifier<'a>) -> Var<'a> {
         if self.validate {
-            if self.id_scopes.len() == 1 {
-                if !self.defined_funcs.insert(func.0) {
-                    panic!("Function redefined");
-                }
-            } else {
-                panic!("Nested function declaration not permitted");
-            }
-        }
-
-        func
-    }
-
-    fn get_var(self: &Self, identifier: &lexer::Identifier<'a>) -> Var {
-        if self.validate {
-            if let Some(id) = self.try_find_id(identifier) {
+            if let Some((id, _)) = self.resolve_identifier(identifier) {
                 if let Identifier::Var(var) = id {
-                    var.clone()
+                    match var {
+                        Var::NoLinkage(index) => Var::NoLinkage(index),
+                        Var::Linkage(_) => Var::Linkage(identifier.0),
+                    }
                 } else {
                     panic!("Function redefined as variable")
                 }
@@ -198,24 +449,35 @@ impl<'a> Context<'a> {
                 panic!("Undeclared variable")
             }
         } else {
-            Var(None)
+            Var::NoLinkage(None)
         }
     }
 
-    fn get_func(self: &Self, identifier: &lexer::Identifier<'a>, arity: usize) -> Func<'a> {
-        let func = Func(identifier.0);
+    fn get_func(self: &Self, lexical_identifier: &lexer::Identifier<'a>, arity: usize) -> Func<'a> {
+        let func = Func(lexical_identifier.0);
+        let identifier = Identifier::Func(func.clone());
+        let symbol_key = identifier_to_symbol_key(&identifier);
 
         if self.validate {
-            if let Some(id) = self.try_find_id(identifier) {
-                if let Identifier::Func = id {
-                    if self.func_signatures.get(identifier.0).unwrap().arity != arity {
+            match self.symbols.get(&symbol_key) {
+                Some(Symbol::Func {
+                    arity: symbol_arity,
+                    ..
+                }) => {
+                    if *symbol_arity != arity {
                         panic!("Function called with different signature");
                     }
-                } else {
-                    panic!("Variable used as function")
                 }
-            } else {
-                panic!("Undeclared function")
+                _ => {
+                    panic!("Undeclared function")
+                }
+            }
+
+            match self.resolve_identifier(&lexical_identifier) {
+                Some((Identifier::Func(_), _)) => (),
+                _ => {
+                    panic!("Variable used as function");
+                }
             }
         }
 
@@ -234,40 +496,62 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn try_find_id(self: &Self, identifier: &lexer::Identifier<'a>) -> Option<Identifier> {
-        let mut id = None;
+    fn associate_identifiers_in_current_scope(
+        self: &mut Self,
+        lexical_identifier: &lexer::Identifier<'a>,
+        identifier: Identifier<'a>,
+    ) {
+        self.id_scopes
+            .last_mut()
+            .unwrap()
+            .insert(lexical_identifier.0, identifier);
+    }
+
+    fn resolve_identifier(
+        self: &Self,
+        lexical_identifier: &lexer::Identifier<'a>,
+    ) -> Option<(Identifier, bool)> {
+        let mut identifier = None;
+        let mut current = true;
         for scope in self.id_scopes.iter().rev() {
-            id = scope.get(identifier.0).cloned();
-            if id.is_some() {
+            identifier = scope.get(lexical_identifier.0).cloned();
+            if identifier.is_some() {
                 break;
             }
+
+            if current {
+                current = false;
+            }
         }
-        id
+        identifier.map(|identifier| (identifier, current))
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Var(pub Option<usize>);
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub enum Var<'a> {
+    NoLinkage(Option<usize>),
+    Linkage(&'a str),
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct Func<'a>(pub &'a str);
 
-#[derive(Debug, Clone)]
-pub enum Identifier {
-    Var(Var),
-    Func,
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub enum Identifier<'a> {
+    Var(Var<'a>),
+    Func(Func<'a>),
 }
 
 #[derive(Debug)]
 pub struct VariableDeclaration<'a> {
-    pub var: Var,
+    pub var: Var<'a>,
     pub expression: Option<Expression<'a>>,
 }
 
 #[derive(Debug)]
 pub struct FunctionDefinition<'a> {
     pub func: Func<'a>,
-    pub params: Vec<Var>,
+    pub params: Vec<Var<'a>>,
     pub body: Block<'a>,
 }
 
@@ -279,9 +563,16 @@ pub enum Declaration<'a> {
 }
 
 #[derive(Debug)]
+pub enum DeclarationSpecification {
+    None,
+    Static,
+    Extern,
+}
+
+#[derive(Debug)]
 pub enum Expression<'a> {
     Constant(lexer::Constant<'a>),
-    Var(Var),
+    Var(Var<'a>),
     Unary {
         operator: UnaryOperator,
         expression: Box<Expression<'a>>,
@@ -671,7 +962,7 @@ fn parse_statement<'a>(
                 _ = pop_token(tokens);
                 ForInit::Null
             } else {
-                if let Some(declaration) = maybe_parse_declaration(tokens, context) {
+                if let Some(declaration) = maybe_parse_declaration(tokens, context, true) {
                     if let Declaration::VariableDeclaration(declaration) = declaration {
                         ForInit::InitDecl(declaration)
                     } else {
@@ -751,6 +1042,7 @@ fn parse_statement<'a>(
 fn maybe_parse_declaration<'a>(
     tokens: &mut Vec<lexer::Token<'a>>,
     context: &mut Context<'a>,
+    for_init: bool,
 ) -> Option<Declaration<'a>> {
     let mut specifier_tokens = Vec::new();
 
@@ -803,6 +1095,14 @@ fn maybe_parse_declaration<'a>(
             panic!("Expected int with optional static or extern");
         }
 
+        let declaration_specification = if static_count == 1 {
+            DeclarationSpecification::Static
+        } else if extern_count == 1 {
+            DeclarationSpecification::Extern
+        } else {
+            DeclarationSpecification::None
+        };
+
         let declaration = if let lexer::Token::Identifier(identifier) = pop_token(tokens) {
             if let lexer::Token::OParen = peek_token(tokens) {
                 _ = pop_token(tokens);
@@ -839,13 +1139,25 @@ fn maybe_parse_declaration<'a>(
                 };
 
                 if let lexer::Token::OBrace = peek_token(tokens) {
-                    let func = context.define_func(&identifier, &param_identifiers);
+                    let func = context.declare_or_define_func(
+                        &identifier,
+                        &param_identifiers,
+                        declaration_specification,
+                        true,
+                    );
 
                     context.push_var_scope();
 
                     let params = param_identifiers
                         .into_iter()
-                        .map(|identifier| context.declare_var(&identifier))
+                        .map(|identifier| {
+                            context.declare_or_define_var(
+                                &identifier,
+                                DeclarationSpecification::None,
+                                false,
+                                false,
+                            )
+                        })
                         .collect();
                     let body = parse_block(tokens, context);
 
@@ -854,7 +1166,12 @@ fn maybe_parse_declaration<'a>(
                     Declaration::FunctionDefinition(FunctionDefinition { func, params, body })
                 } else {
                     if let lexer::Token::Semicolon = pop_token(tokens) {
-                        _ = context.declare_func(&identifier, &param_identifiers);
+                        _ = context.declare_or_define_func(
+                            &identifier,
+                            &param_identifiers,
+                            declaration_specification,
+                            false,
+                        );
 
                         Declaration::FunctionDeclaration
                     } else {
@@ -862,11 +1179,28 @@ fn maybe_parse_declaration<'a>(
                     }
                 }
             } else {
-                let var = context.declare_var(&identifier);
+                let var = if let lexer::Token::Equal = peek_token(tokens) {
+                    context.declare_or_define_var(
+                        &identifier,
+                        declaration_specification,
+                        true,
+                        for_init,
+                    )
+                } else {
+                    context.declare_or_define_var(
+                        &identifier,
+                        declaration_specification,
+                        false,
+                        for_init,
+                    )
+                };
 
                 let expression = match pop_token(tokens) {
                     lexer::Token::Equal => {
                         let expression = parse_expression(tokens, 0, context);
+
+                        context.define_var_expression(&Identifier::Var(var.clone()), &expression);
+
                         if let lexer::Token::Semicolon = pop_token(tokens) {
                             Some(expression)
                         } else {
@@ -893,7 +1227,7 @@ fn parse_block_item<'a>(
     tokens: &mut Vec<lexer::Token<'a>>,
     context: &mut Context<'a>,
 ) -> BlockItem<'a> {
-    let declaration = maybe_parse_declaration(tokens, context);
+    let declaration = maybe_parse_declaration(tokens, context, false);
 
     if let Some(declaration) = declaration {
         BlockItem::Declaration(declaration)
@@ -909,7 +1243,7 @@ pub fn parse_program<'a>(
     let mut declarations = Vec::new();
 
     while !tokens.is_empty() {
-        if let Some(declaration) = maybe_parse_declaration(tokens, context) {
+        if let Some(declaration) = maybe_parse_declaration(tokens, context, false) {
             declarations.push(declaration);
         } else {
             panic!("Expected <declaration>")

@@ -107,15 +107,20 @@ impl Context {
     }
 
     fn resolve_parser_var<'a, 'b>(self: &'a mut Self, var: &parser::Var) -> Val<'b> {
-        let var = var.0.unwrap();
+        match var {
+            parser::Var::NoLinkage(index) => {
+                let index = index.unwrap();
 
-        if let Some(tmp) = self.var_to_tmp.get(&var) {
-            Val::Tmp(*tmp)
-        } else {
-            let tmp = self.last_tmp_index;
-            self.var_to_tmp.insert(var, tmp);
-            self.last_tmp_index += 1;
-            Val::Tmp(tmp)
+                if let Some(tmp) = self.var_to_tmp.get(&index) {
+                    Val::Tmp(*tmp)
+                } else {
+                    let tmp = self.last_tmp_index;
+                    self.var_to_tmp.insert(index, tmp);
+                    self.last_tmp_index += 1;
+                    Val::Tmp(tmp)
+                }
+            }
+            parser::Var::Linkage(_) => todo!(),
         }
     }
 
@@ -369,8 +374,9 @@ fn gen_val<'a, 'b>(
                 })
                 .collect();
             let result = context.next_tmp();
+            let parser::Func(name) = func;
             instructions.push(Instruction::Call {
-                name: func.0,
+                name,
                 args,
                 result: result.clone(),
                 non_local: true,
@@ -583,9 +589,9 @@ fn maybe_gen_function<'a, 'b>(
                 .into_iter()
                 .map(|param| context.resolve_parser_var(&param))
                 .collect();
-
+            let parser::Func(name) = func;
             Some(Function {
-                name: func.0,
+                name,
                 params,
                 instructions,
             })
