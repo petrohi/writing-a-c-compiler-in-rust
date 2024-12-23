@@ -26,7 +26,7 @@ pub enum BinaryOperator {
     Or,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum InitialValue<'a> {
     Tentative,
     Init(Option<&'a str>),
@@ -34,12 +34,13 @@ enum InitialValue<'a> {
     NoInit,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 enum SymbolKey<'a> {
     NoLinkage(usize),
     Linkage(&'a str),
 }
 
+#[derive(Debug)]
 enum Symbol<'a> {
     Func {
         arity: usize,
@@ -76,8 +77,15 @@ fn identifier_to_symbol_key<'a>(identifier: &Identifier<'a>) -> SymbolKey<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum StaticVarName<'a> {
+    NoLinkage(usize),
+    Linkage(&'a str),
+}
+
+#[derive(Clone, Debug)]
 pub struct StaticVar<'a> {
-    pub name: String,
+    pub name: StaticVarName<'a>,
     pub global: bool,
     pub init: &'a str,
 }
@@ -97,7 +105,33 @@ impl<'a> Context<'a> {
 
     pub fn is_global_function(self: &Self, func: &Func) -> bool {
         let symbol_key = identifier_to_symbol_key(&Identifier::Func(func.clone()));
-        self.symbols.contains_key(&symbol_key)
+        if let Symbol::Func { global, .. } = self.symbols.get(&symbol_key).unwrap() {
+            *global
+        } else {
+            false
+        }
+    }
+
+    pub fn is_defined_function(self: &Self, func: &Func) -> bool {
+        let symbol_key = identifier_to_symbol_key(&Identifier::Func(func.clone()));
+        if let Symbol::Func { defined, .. } = self.symbols.get(&symbol_key).unwrap() {
+            *defined
+        } else {
+            false
+        }
+    }
+
+    pub fn is_no_linkage_static(self: &Self, var: &Var) -> bool {
+        if let Var::NoLinkage(_) = var {
+            let symbol_key = identifier_to_symbol_key(&Identifier::Var(var.clone()));
+            if let Symbol::Static { .. } = self.symbols.get(&symbol_key).unwrap() {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     pub fn get_static_vars(self: &Self) -> Vec<StaticVar<'a>> {
@@ -110,8 +144,8 @@ impl<'a> Context<'a> {
                     global,
                 } => {
                     let name = match key {
-                        SymbolKey::NoLinkage(index) => format!("static_{}", index),
-                        SymbolKey::Linkage(name) => (*name).to_owned(),
+                        SymbolKey::NoLinkage(index) => StaticVarName::NoLinkage(*index),
+                        SymbolKey::Linkage(name) => StaticVarName::Linkage(name),
                     };
 
                     let init = match initial_value {
@@ -362,15 +396,15 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn define_var_expression(
+    fn define_var_and_try_folding_expression(
         self: &mut Self,
         identifier: &Identifier<'a>,
         expression: &Expression<'a>,
-    ) {
+    ) -> bool {
         if self.validate {
             let symbol_key = identifier_to_symbol_key(identifier);
             match self.symbols.get(&symbol_key) {
-                None | Some(Symbol::Local) => (),
+                None | Some(Symbol::Local) => false,
                 Some(Symbol::Static {
                     initial_value,
                     global,
@@ -384,6 +418,8 @@ impl<'a> Context<'a> {
                                     global: *global,
                                 },
                             );
+
+                            true
                         } else {
                             panic!("Non-constant initializer");
                         }
@@ -393,6 +429,8 @@ impl<'a> Context<'a> {
                 }
                 _ => panic!("Unexpected symbol"),
             }
+        } else {
+            false
         }
     }
 
@@ -446,8 +484,10 @@ impl<'a> Context<'a> {
                         panic!("Function redeclared with different arity");
                     }
 
-                    if *symbol_global && !global {
-                        panic!("Static function declaration is followed by non-static")
+                    if let DeclarationSpecification::Static = declaration_specification {
+                        if *symbol_global {
+                            panic!("Static function declaration is followed by non-static")
+                        }
                     }
 
                     global = *symbol_global;
@@ -517,7 +557,7 @@ impl<'a> Context<'a> {
                 _ => {
                     panic!("Undeclared function")
                 }
-            }
+            };
 
             match self.resolve_identifier(&lexical_identifier) {
                 Some((Identifier::Func(_), _)) => (),
@@ -800,7 +840,6 @@ fn parse_factor<'a>(
             }
         }
         _ => {
-            dbg!(tokens);
             panic!("Unexpected token");
         }
     }
@@ -1245,10 +1284,15 @@ fn maybe_parse_declaration<'a>(
                     lexer::Token::Equal => {
                         let expression = parse_expression(tokens, 0, context);
 
-                        context.define_var_expression(&Identifier::Var(var.clone()), &expression);
-
                         if let lexer::Token::Semicolon = pop_token(tokens) {
-                            Some(expression)
+                            if context.define_var_and_try_folding_expression(
+                                &Identifier::Var(var.clone()),
+                                &expression,
+                            ) {
+                                None
+                            } else {
+                                Some(expression)
+                            }
                         } else {
                             panic!("Expected ;");
                         }

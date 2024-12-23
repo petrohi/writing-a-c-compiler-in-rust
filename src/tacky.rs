@@ -6,7 +6,8 @@ use crate::{lexer, parser};
 pub enum Val<'a> {
     Constant(lexer::Constant<'a>),
     Tmp(usize),
-    Data(&'a str),
+    Linkage(&'a str),
+    NoLinkage(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -81,16 +82,9 @@ pub struct Function<'a> {
 }
 
 #[derive(Debug)]
-pub struct StaticVar<'a> {
-    pub name: String,
-    pub global: bool,
-    pub init: &'a str,
-}
-
-#[derive(Debug)]
 pub enum TopLevelItem<'a> {
     Function(Function<'a>),
-    StaticVar(StaticVar<'a>),
+    StaticVar(parser::StaticVar<'a>),
 }
 
 #[derive(Debug)]
@@ -121,21 +115,29 @@ impl Context {
         tmp
     }
 
-    fn resolve_parser_var<'a, 'b>(self: &'a mut Self, var: &parser::Var<'b>) -> Val<'b> {
+    fn resolve_parser_var<'a, 'b, 'c>(
+        self: &'a mut Self,
+        var: &parser::Var<'b>,
+        parser_context: &parser::Context<'c>,
+    ) -> Val<'b> {
         match var {
             parser::Var::NoLinkage(index) => {
                 let index = index.unwrap();
 
-                if let Some(tmp) = self.var_to_tmp.get(&index) {
-                    Val::Tmp(*tmp)
+                if parser_context.is_no_linkage_static(var) {
+                    Val::NoLinkage(index)
                 } else {
-                    let tmp = self.last_tmp_index;
-                    self.var_to_tmp.insert(index, tmp);
-                    self.last_tmp_index += 1;
-                    Val::Tmp(tmp)
+                    if let Some(tmp) = self.var_to_tmp.get(&index) {
+                        Val::Tmp(*tmp)
+                    } else {
+                        let tmp = self.last_tmp_index;
+                        self.var_to_tmp.insert(index, tmp);
+                        self.last_tmp_index += 1;
+                        Val::Tmp(tmp)
+                    }
                 }
             }
-            parser::Var::Linkage(name) => Val::Data(name),
+            parser::Var::Linkage(name) => Val::Linkage(name),
         }
     }
 
@@ -172,9 +174,10 @@ impl Context {
     }
 }
 
-fn gen_val<'a, 'b>(
+fn gen_val<'a, 'b, 'c>(
     expression: parser::Expression<'a>,
     context: &'b mut Context,
+    parser_context: &'c parser::Context,
 ) -> (Val<'a>, Vec<Instruction<'a>>) {
     match expression {
         parser::Expression::Constant(constant) => (Val::Constant(constant), Vec::new()),
@@ -190,7 +193,7 @@ fn gen_val<'a, 'b>(
 
             if let Some(unary_operator) = unary_operator {
                 let dst = context.next_tmp();
-                let (src, mut instructions) = gen_val(*expression, context);
+                let (src, mut instructions) = gen_val(*expression, context, parser_context);
                 instructions.push(Instruction::Unary {
                     operator: unary_operator,
                     src,
@@ -225,8 +228,8 @@ fn gen_val<'a, 'b>(
 
             if let Some(binary_operator) = binary_operator {
                 let dst = context.next_tmp();
-                let (src1, mut src1_instructions) = gen_val(*left, context);
-                let (src2, src2_instructions) = gen_val(*right, context);
+                let (src1, mut src1_instructions) = gen_val(*left, context, parser_context);
+                let (src2, src2_instructions) = gen_val(*right, context, parser_context);
                 src1_instructions.extend(src2_instructions);
                 src1_instructions.push(Instruction::Binary {
                     operator: binary_operator,
@@ -243,8 +246,8 @@ fn gen_val<'a, 'b>(
                 let is_false = context.next_label();
                 let end = context.next_label();
 
-                let (src1, mut src1_instructions) = gen_val(*left, context);
-                let (src2, src2_instructions) = gen_val(*right, context);
+                let (src1, mut src1_instructions) = gen_val(*left, context, parser_context);
+                let (src2, src2_instructions) = gen_val(*right, context, parser_context);
 
                 src1_instructions.push(Instruction::Copy {
                     src: src1,
@@ -286,8 +289,8 @@ fn gen_val<'a, 'b>(
                 let is_true = context.next_label();
                 let end = context.next_label();
 
-                let (src1, mut src1_instructions) = gen_val(*left, context);
-                let (src2, src2_instructions) = gen_val(*right, context);
+                let (src1, mut src1_instructions) = gen_val(*left, context, parser_context);
+                let (src2, src2_instructions) = gen_val(*right, context, parser_context);
 
                 src1_instructions.push(Instruction::Copy {
                     src: src1,
@@ -326,12 +329,12 @@ fn gen_val<'a, 'b>(
             }
         }
         parser::Expression::Var(var) => {
-            let dst = context.resolve_parser_var(&var);
+            let dst = context.resolve_parser_var(&var, parser_context);
             (dst, Vec::new())
         }
         parser::Expression::Assignment { lvalue, rvalue } => {
-            let (lvalue, mut lvalue_instructions) = gen_val(*lvalue, context);
-            let (rvalue, rvalue_instructions) = gen_val(*rvalue, context);
+            let (lvalue, mut lvalue_instructions) = gen_val(*lvalue, context, parser_context);
+            let (rvalue, rvalue_instructions) = gen_val(*rvalue, context, parser_context);
             lvalue_instructions.extend(rvalue_instructions);
             lvalue_instructions.push(Instruction::Copy {
                 src: rvalue,
@@ -345,7 +348,8 @@ fn gen_val<'a, 'b>(
             els,
         } => {
             let dst = context.next_tmp();
-            let (condition, mut condition_instructions) = gen_val(*condition, context);
+            let (condition, mut condition_instructions) =
+                gen_val(*condition, context, parser_context);
             let els_label = context.next_label();
             let end = context.next_label();
             condition_instructions.push(Instruction::JumpIfZero {
@@ -353,7 +357,7 @@ fn gen_val<'a, 'b>(
                 target: els_label.clone(),
             });
 
-            let (then, then_instructions) = gen_val(*then, context);
+            let (then, then_instructions) = gen_val(*then, context, parser_context);
             condition_instructions.extend(then_instructions);
             condition_instructions.extend([
                 Instruction::Copy {
@@ -366,7 +370,7 @@ fn gen_val<'a, 'b>(
                 Instruction::Label(els_label),
             ]);
 
-            let (els, els_instructions) = gen_val(*els, context);
+            let (els, els_instructions) = gen_val(*els, context, parser_context);
             condition_instructions.extend(els_instructions);
             condition_instructions.extend([
                 Instruction::Copy {
@@ -383,7 +387,7 @@ fn gen_val<'a, 'b>(
             let args = args
                 .into_iter()
                 .map(|arg| {
-                    let (arg, arg_instructions) = gen_val(arg, context);
+                    let (arg, arg_instructions) = gen_val(arg, context, parser_context);
                     instructions.extend(arg_instructions);
                     arg
                 })
@@ -394,7 +398,7 @@ fn gen_val<'a, 'b>(
                 name,
                 args,
                 result: result.clone(),
-                non_local: true,
+                non_local: !parser_context.is_defined_function(&func),
             });
 
             (result, instructions)
@@ -402,18 +406,19 @@ fn gen_val<'a, 'b>(
     }
 }
 
-fn gen_statement<'a, 'b>(
+fn gen_statement<'a, 'b, 'c>(
     statement: parser::Statement<'a>,
     context: &'b mut Context,
+    parser_context: &'c parser::Context,
 ) -> Vec<Instruction<'a>> {
     match statement {
         parser::Statement::Return(expression) => {
-            let (val, mut instructions) = gen_val(expression, context);
+            let (val, mut instructions) = gen_val(expression, context, parser_context);
             instructions.push(Instruction::Return(val));
             instructions
         }
         parser::Statement::Expression(expression) => {
-            let (_, instructions) = gen_val(expression, context);
+            let (_, instructions) = gen_val(expression, context, parser_context);
             instructions
         }
         parser::Statement::Null => Vec::new(),
@@ -422,14 +427,15 @@ fn gen_statement<'a, 'b>(
             then,
             els,
         } => {
-            let (condition, mut condition_instructions) = gen_val(condition, context);
+            let (condition, mut condition_instructions) =
+                gen_val(condition, context, parser_context);
             let els_or_end_label = context.next_label();
             condition_instructions.push(Instruction::JumpIfZero {
                 condition,
                 target: els_or_end_label.clone(),
             });
 
-            condition_instructions.extend(gen_statement(*then, context));
+            condition_instructions.extend(gen_statement(*then, context, parser_context));
 
             if let Some(els) = els {
                 let end = context.next_label();
@@ -440,7 +446,7 @@ fn gen_statement<'a, 'b>(
                     Instruction::Label(els_or_end_label),
                 ]);
 
-                condition_instructions.extend(gen_statement(*els, context));
+                condition_instructions.extend(gen_statement(*els, context, parser_context));
                 condition_instructions.push(Instruction::Label(end));
             } else {
                 condition_instructions.push(Instruction::Label(els_or_end_label));
@@ -448,7 +454,7 @@ fn gen_statement<'a, 'b>(
 
             condition_instructions
         }
-        parser::Statement::Block(block) => gen_block(block, context),
+        parser::Statement::Block(block) => gen_block(block, context, parser_context),
         parser::Statement::Break(label) => vec![Instruction::Jump {
             target: context.resolve_break_label(&label),
         }],
@@ -465,14 +471,14 @@ fn gen_statement<'a, 'b>(
             let end = context.resolve_break_label(&label);
 
             instructions.push(Instruction::Label(start.clone()));
-            let (condition, condition_instructions) = gen_val(condition, context);
+            let (condition, condition_instructions) = gen_val(condition, context, parser_context);
 
             instructions.extend(condition_instructions);
             instructions.push(Instruction::JumpIfZero {
                 condition,
                 target: end.clone(),
             });
-            instructions.extend(gen_statement(*body, context));
+            instructions.extend(gen_statement(*body, context, parser_context));
             instructions.extend([Instruction::Jump { target: start }, Instruction::Label(end)]);
 
             instructions
@@ -486,10 +492,10 @@ fn gen_statement<'a, 'b>(
             let start = context.next_label();
 
             instructions.push(Instruction::Label(start.clone()));
-            instructions.extend(gen_statement(*body, context));
+            instructions.extend(gen_statement(*body, context, parser_context));
             instructions.push(Instruction::Label(context.resolve_continue_label(&label)));
 
-            let (condition, condition_instructions) = gen_val(condition, context);
+            let (condition, condition_instructions) = gen_val(condition, context, parser_context);
 
             instructions.extend(condition_instructions);
             instructions.extend([
@@ -511,10 +517,10 @@ fn gen_statement<'a, 'b>(
         } => {
             let mut instructions = match for_init {
                 parser::ForInit::InitDecl(declaration) => {
-                    gen_variable_declaration(declaration, context)
+                    gen_variable_declaration(declaration, context, parser_context)
                 }
                 parser::ForInit::InitExp(expression) => {
-                    let (_, init_instructions) = gen_val(expression, context);
+                    let (_, init_instructions) = gen_val(expression, context, parser_context);
                     init_instructions
                 }
                 parser::ForInit::Null => Vec::new(),
@@ -526,7 +532,8 @@ fn gen_statement<'a, 'b>(
             instructions.push(Instruction::Label(start.clone()));
 
             if let Some(condition) = condition {
-                let (condition, condition_instructions) = gen_val(condition, context);
+                let (condition, condition_instructions) =
+                    gen_val(condition, context, parser_context);
 
                 instructions.extend(condition_instructions);
                 instructions.push(Instruction::JumpIfZero {
@@ -535,11 +542,11 @@ fn gen_statement<'a, 'b>(
                 });
             }
 
-            instructions.extend(gen_statement(*body, context));
+            instructions.extend(gen_statement(*body, context, parser_context));
             instructions.push(Instruction::Label(context.resolve_continue_label(&label)));
 
             if let Some(post) = post {
-                let (_, post_instructions) = gen_val(post, context);
+                let (_, post_instructions) = gen_val(post, context, parser_context);
                 instructions.extend(post_instructions);
             }
 
@@ -550,15 +557,16 @@ fn gen_statement<'a, 'b>(
     }
 }
 
-fn gen_variable_declaration<'a, 'b>(
+fn gen_variable_declaration<'a, 'b, 'c>(
     declaration: parser::VariableDeclaration<'a>,
     context: &'b mut Context,
+    parser_context: &'c parser::Context,
 ) -> Vec<Instruction<'a>> {
     let parser::VariableDeclaration { var, expression } = declaration;
 
     if let Some(expression) = expression {
-        let (src, mut instructions) = gen_val(expression, context);
-        let dst = context.resolve_parser_var(&var);
+        let (src, mut instructions) = gen_val(expression, context, parser_context);
+        let dst = context.resolve_parser_var(&var, parser_context);
         instructions.push(Instruction::Copy { src, dst });
         instructions
     } else {
@@ -566,18 +574,25 @@ fn gen_variable_declaration<'a, 'b>(
     }
 }
 
-fn gen_block<'a, 'b>(block: parser::Block<'a>, context: &'b mut Context) -> Vec<Instruction<'a>> {
+fn gen_block<'a, 'b, 'c>(
+    block: parser::Block<'a>,
+    context: &'b mut Context,
+    parser_context: &'c parser::Context,
+) -> Vec<Instruction<'a>> {
     let mut instructions = Vec::new();
 
     for block_item in block.0 {
         match block_item {
             parser::BlockItem::Statement(statement) => {
-                instructions.extend(gen_statement(statement, context));
+                instructions.extend(gen_statement(statement, context, parser_context));
             }
             parser::BlockItem::Declaration(declaration) => match declaration {
-                parser::Declaration::VariableDeclaration(variable_declaration) => {
-                    instructions.extend(gen_variable_declaration(variable_declaration, context))
-                }
+                parser::Declaration::VariableDeclaration(variable_declaration) => instructions
+                    .extend(gen_variable_declaration(
+                        variable_declaration,
+                        context,
+                        parser_context,
+                    )),
                 parser::Declaration::FunctionDeclaration => (),
                 parser::Declaration::FunctionDefinition(_) => panic!(),
             },
@@ -598,12 +613,12 @@ fn maybe_gen_function<'a, 'b, 'c>(
         parser::Declaration::FunctionDefinition(function_definition) => {
             let parser::FunctionDefinition { func, body, params } = function_definition;
             let mut instructions = Vec::new();
-            instructions.extend(gen_block(body, context));
+            instructions.extend(gen_block(body, context, parser_context));
             instructions.push(Instruction::Return(Val::Constant(lexer::Constant("0"))));
 
             let params = params
                 .into_iter()
-                .map(|param| context.resolve_parser_var(&param))
+                .map(|param| context.resolve_parser_var(&param, parser_context))
                 .collect();
             let parser::Func(name) = func;
             Some(Function {
@@ -630,11 +645,12 @@ pub fn gen_program<'a, 'b, 'c>(
         }
     }
 
-    for static_var in parser_context.get_static_vars() {
-        let parser::StaticVar { name, global, init } = static_var;
-
-        top_level_items.push(TopLevelItem::StaticVar(StaticVar { name, global, init }));
-    }
+    top_level_items.extend(
+        parser_context
+            .get_static_vars()
+            .iter()
+            .map(|static_var| TopLevelItem::StaticVar(static_var.clone())),
+    );
 
     Program(top_level_items)
 }

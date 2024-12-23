@@ -1,6 +1,6 @@
 use std::{cmp::min, collections::HashMap};
 
-use crate::{lexer, tacky};
+use crate::{lexer, parser, tacky};
 
 #[derive(Clone, Debug)]
 pub enum Register {
@@ -27,7 +27,7 @@ pub enum Operand<'a> {
     Imm(lexer::Constant<'a>),
     Register(Register),
     Pseudo(usize),
-    Data(&'a str),
+    Data(String),
     Stack(isize),
 }
 
@@ -107,16 +107,9 @@ pub struct Function<'a> {
 }
 
 #[derive(Debug)]
-pub struct StaticVar<'a> {
-    pub name: String,
-    pub global: bool,
-    pub init: &'a str,
-}
-
-#[derive(Debug)]
 pub enum TopLevelItem<'a> {
     Function(Function<'a>),
-    StaticVar(StaticVar<'a>),
+    StaticVar(parser::StaticVar<'a>),
 }
 
 #[derive(Debug)]
@@ -135,11 +128,16 @@ const ARG_REGISTERS: [Register; 6] = [
     Register::R9,
 ];
 
+fn no_linkage_static_name_from_index(index: usize) -> String {
+    format!("static.{}", index)
+}
+
 fn gen_operand(val: tacky::Val) -> Operand {
     match val {
         tacky::Val::Constant(constant) => Operand::Imm(constant),
         tacky::Val::Tmp(index) => Operand::Pseudo(index),
-        tacky::Val::Data(name) => Operand::Data(name),
+        tacky::Val::Linkage(name) => Operand::Data(name.to_string()),
+        tacky::Val::NoLinkage(index) => Operand::Data(no_linkage_static_name_from_index(index)),
     }
 }
 
@@ -405,12 +403,6 @@ fn gen_function(function: tacky::Function) -> Function {
     }
 }
 
-fn gen_static_var<'a>(static_var: tacky::StaticVar<'a>) -> StaticVar<'a> {
-    let tacky::StaticVar { name, global, init } = static_var;
-
-    StaticVar { name, global, init }
-}
-
 pub fn gen_program(program: tacky::Program) -> Program {
     let tacky::Program(top_level_items) = program;
     Program(
@@ -420,9 +412,7 @@ pub fn gen_program(program: tacky::Program) -> Program {
                 tacky::TopLevelItem::Function(function) => {
                     TopLevelItem::Function(gen_function(function))
                 }
-                tacky::TopLevelItem::StaticVar(static_var) => {
-                    TopLevelItem::StaticVar(gen_static_var(static_var))
-                }
+                tacky::TopLevelItem::StaticVar(static_var) => TopLevelItem::StaticVar(static_var),
             })
             .collect(),
     )
@@ -452,7 +442,7 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     let Function {
         instructions,
         name: func,
-        global: global,
+        global,
     } = function;
     let mut rewritten_instructions = Vec::new();
     let mut stack = HashMap::new();
@@ -525,7 +515,10 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     for instruction in instructions {
         match instruction {
             Instruction::Move { ref src, ref dst } => match (src, dst) {
-                (Operand::Stack(_), Operand::Stack(_)) => rewritten_instructions.extend([
+                (Operand::Stack(_), Operand::Stack(_))
+                | (Operand::Data(_), Operand::Data(_))
+                | (Operand::Stack(_), Operand::Data(_))
+                | (Operand::Data(_), Operand::Stack(_)) => rewritten_instructions.extend([
                     Instruction::Move {
                         src: src.clone(),
                         dst: Operand::Register(Register::R10),
@@ -545,26 +538,30 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
             } => {
                 if let BinaryOperator::Mul = operator {
                     match (src, dst) {
-                        (_, Operand::Stack(_)) => rewritten_instructions.extend([
-                            Instruction::Move {
-                                src: dst.clone(),
-                                dst: Operand::Register(Register::R11),
-                            },
-                            Instruction::Binary {
-                                operator: BinaryOperator::Mul,
-                                src: src.clone(),
-                                dst: Operand::Register(Register::R11),
-                            },
-                            Instruction::Move {
-                                src: Operand::Register(Register::R11),
-                                dst: dst.clone(),
-                            },
-                        ]),
+                        (_, Operand::Stack(_)) | (_, Operand::Data(_)) => rewritten_instructions
+                            .extend([
+                                Instruction::Move {
+                                    src: dst.clone(),
+                                    dst: Operand::Register(Register::R11),
+                                },
+                                Instruction::Binary {
+                                    operator: BinaryOperator::Mul,
+                                    src: src.clone(),
+                                    dst: Operand::Register(Register::R11),
+                                },
+                                Instruction::Move {
+                                    src: Operand::Register(Register::R11),
+                                    dst: dst.clone(),
+                                },
+                            ]),
                         _ => rewritten_instructions.push(instruction),
                     }
                 } else {
                     match (src, dst) {
-                        (Operand::Stack(_), Operand::Stack(_)) => rewritten_instructions.extend([
+                        (Operand::Stack(_), Operand::Stack(_))
+                        | (Operand::Data(_), Operand::Data(_))
+                        | (Operand::Stack(_), Operand::Data(_))
+                        | (Operand::Data(_), Operand::Stack(_)) => rewritten_instructions.extend([
                             Instruction::Move {
                                 src: src.clone(),
                                 dst: Operand::Register(Register::R10),
@@ -581,7 +578,10 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
             }
 
             Instruction::Cmp { ref src1, ref src2 } => match (src1, src2) {
-                (Operand::Stack(_), Operand::Stack(_)) => rewritten_instructions.extend([
+                (Operand::Stack(_), Operand::Stack(_))
+                | (Operand::Data(_), Operand::Data(_))
+                | (Operand::Stack(_), Operand::Data(_))
+                | (Operand::Data(_), Operand::Stack(_)) => rewritten_instructions.extend([
                     Instruction::Move {
                         src: src1.clone(),
                         dst: Operand::Register(Register::R10),
@@ -618,13 +618,14 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
             },
 
             Instruction::Push(ref operand) => match operand {
-                Operand::Stack(_) | Operand::Imm(_) => rewritten_instructions.extend([
-                    Instruction::Move {
-                        src: operand.clone(),
-                        dst: Operand::Register(Register::Ax),
-                    },
-                    Instruction::Push(Operand::Register(Register::Ax)),
-                ]),
+                Operand::Stack(_) | Operand::Data(_) | Operand::Imm(_) => rewritten_instructions
+                    .extend([
+                        Instruction::Move {
+                            src: operand.clone(),
+                            dst: Operand::Register(Register::Ax),
+                        },
+                        Instruction::Push(Operand::Register(Register::Ax)),
+                    ]),
                 _ => rewritten_instructions.push(instruction),
             },
 
@@ -654,7 +655,7 @@ pub fn rewrite_program_to_fixup_instructions(program: Program) -> Program {
     )
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Fragment<'a> {
     Str(&'a str),
     String(String),
@@ -709,8 +710,8 @@ fn emit_operand(operand: Operand, size: OperandSize) -> Vec<Fragment> {
 
         Operand::Register(register) => text.push(emit_register(register, size)),
         Operand::Stack(position) => text.push(Fragment::String(format!("{}(%rbp)", position))),
+        Operand::Data(name) => text.push(Fragment::String(format!("{}(%rip)", name))),
         Operand::Pseudo(_) => panic!("Pseudo operand"),
-        Operand::Data(_) => todo!(),
     }
 
     text
@@ -847,6 +848,8 @@ fn emit_function(function: Function) -> Vec<Fragment> {
         text.push(Fragment::Str(name));
         text.push(Fragment::Str("\n"));
     }
+
+    text.push(Fragment::Str("\t.text\n"));
     text.push(Fragment::Str(name));
     text.push(Fragment::Str(":\n"));
 
@@ -856,6 +859,48 @@ fn emit_function(function: Function) -> Vec<Fragment> {
     for instruction in instructions {
         text.extend(emit_instruction(instruction));
     }
+
+    text.push(Fragment::Str("\n"));
+
+    text
+}
+
+fn emit_static_var(static_var: parser::StaticVar) -> Vec<Fragment> {
+    let parser::StaticVar { name, global, init } = static_var;
+    let mut text = Vec::new();
+
+    let name = match name {
+        parser::StaticVarName::NoLinkage(index) => {
+            Fragment::String(no_linkage_static_name_from_index(index))
+        }
+        parser::StaticVarName::Linkage(name) => Fragment::Str(name),
+    };
+
+    if global {
+        text.push(Fragment::Str("\t.globl "));
+        text.push(name.clone());
+        text.push(Fragment::Str("\n"));
+    }
+
+    if init == "0" {
+        text.push(Fragment::Str("\t.bss\n"));
+    } else {
+        text.push(Fragment::Str("\t.data\n"));
+    }
+
+    text.push(Fragment::Str("\t.align 4\n"));
+    text.push(name);
+    text.push(Fragment::Str(":\n"));
+
+    if init == "0" {
+        text.push(Fragment::Str("\t.zero 4\n"));
+    } else {
+        text.push(Fragment::Str("\t.long "));
+        text.push(Fragment::Str(init));
+        text.push(Fragment::Str("\n"));
+    }
+
+    text.push(Fragment::Str("\n"));
 
     text
 }
@@ -867,7 +912,7 @@ pub fn emit_program(program: Program) -> Vec<Fragment> {
     for item in top_level_items {
         match item {
             TopLevelItem::Function(function) => text.extend(emit_function(function)),
-            TopLevelItem::StaticVar(static_var) => todo!(),
+            TopLevelItem::StaticVar(static_var) => text.extend(emit_static_var(static_var)),
         }
     }
     text.push(Fragment::Str("\n.section .note.GNU-stack,\"\",@progbits\n"));
