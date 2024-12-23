@@ -27,6 +27,7 @@ pub enum Operand<'a> {
     Imm(lexer::Constant<'a>),
     Register(Register),
     Pseudo(usize),
+    Data(&'a str),
     Stack(isize),
 }
 
@@ -102,9 +103,24 @@ pub enum Instruction<'a> {
 pub struct Function<'a> {
     name: &'a str,
     instructions: Vec<Instruction<'a>>,
+    global: bool,
 }
+
 #[derive(Debug)]
-pub struct Program<'a>(Vec<Function<'a>>);
+pub struct StaticVar<'a> {
+    pub name: String,
+    pub global: bool,
+    pub init: &'a str,
+}
+
+#[derive(Debug)]
+pub enum TopLevelItem<'a> {
+    Function(Function<'a>),
+    StaticVar(StaticVar<'a>),
+}
+
+#[derive(Debug)]
+pub struct Program<'a>(Vec<TopLevelItem<'a>>);
 
 fn align_stack(size: usize) -> usize {
     ((size + 15) / 16) * 16
@@ -123,7 +139,7 @@ fn gen_operand(val: tacky::Val) -> Operand {
     match val {
         tacky::Val::Constant(constant) => Operand::Imm(constant),
         tacky::Val::Tmp(index) => Operand::Pseudo(index),
-        tacky::Val::Data(_) => todo!(),
+        tacky::Val::Data(name) => Operand::Data(name),
     }
 }
 
@@ -382,7 +398,17 @@ fn gen_function(function: tacky::Function) -> Function {
 
     instructions.extend(gen_instructions(function_instructions));
 
-    Function { name, instructions }
+    Function {
+        name,
+        instructions,
+        global,
+    }
+}
+
+fn gen_static_var<'a>(static_var: tacky::StaticVar<'a>) -> StaticVar<'a> {
+    let tacky::StaticVar { name, global, init } = static_var;
+
+    StaticVar { name, global, init }
 }
 
 pub fn gen_program(program: tacky::Program) -> Program {
@@ -391,8 +417,12 @@ pub fn gen_program(program: tacky::Program) -> Program {
         top_level_items
             .into_iter()
             .map(|item| match item {
-                tacky::TopLevelItem::Function(function) => gen_function(function),
-                tacky::TopLevelItem::StaticVar(static_var) => todo!(),
+                tacky::TopLevelItem::Function(function) => {
+                    TopLevelItem::Function(gen_function(function))
+                }
+                tacky::TopLevelItem::StaticVar(static_var) => {
+                    TopLevelItem::StaticVar(gen_static_var(static_var))
+                }
             })
             .collect(),
     )
@@ -422,7 +452,7 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     let Function {
         instructions,
         name: func,
-        ..
+        global: global,
     } = function;
     let mut rewritten_instructions = Vec::new();
     let mut stack = HashMap::new();
@@ -465,15 +495,21 @@ fn rewrite_function_to_eliminate_psedo(function: Function) -> Function {
     Function {
         name: func,
         instructions: rewritten_instructions,
+        global,
     }
 }
 
 pub fn rewrite_program_to_eliminate_psedo(program: Program) -> Program {
-    let Program(functions) = program;
+    let Program(top_level_items) = program;
     Program(
-        functions
+        top_level_items
             .into_iter()
-            .map(|function| rewrite_function_to_eliminate_psedo(function))
+            .map(|item| match item {
+                TopLevelItem::Function(function) => {
+                    TopLevelItem::Function(rewrite_function_to_eliminate_psedo(function))
+                }
+                TopLevelItem::StaticVar(_) => item,
+            })
             .collect(),
     )
 }
@@ -482,6 +518,7 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     let Function {
         instructions,
         name: func,
+        global,
     } = function;
     let mut rewritten_instructions = Vec::new();
 
@@ -598,15 +635,21 @@ fn rewrite_function_to_fixup_instructions(function: Function) -> Function {
     Function {
         name: func,
         instructions: rewritten_instructions,
+        global,
     }
 }
 
 pub fn rewrite_program_to_fixup_instructions(program: Program) -> Program {
-    let Program(functions) = program;
+    let Program(top_level_items) = program;
     Program(
-        functions
+        top_level_items
             .into_iter()
-            .map(|function| rewrite_function_to_fixup_instructions(function))
+            .map(|item| match item {
+                TopLevelItem::Function(function) => {
+                    TopLevelItem::Function(rewrite_function_to_fixup_instructions(function))
+                }
+                TopLevelItem::StaticVar(_) => item,
+            })
             .collect(),
     )
 }
@@ -667,6 +710,7 @@ fn emit_operand(operand: Operand, size: OperandSize) -> Vec<Fragment> {
         Operand::Register(register) => text.push(emit_register(register, size)),
         Operand::Stack(position) => text.push(Fragment::String(format!("{}(%rbp)", position))),
         Operand::Pseudo(_) => panic!("Pseudo operand"),
+        Operand::Data(_) => todo!(),
     }
 
     text
@@ -791,12 +835,18 @@ fn emit_instruction(instruction: Instruction) -> Vec<Fragment> {
 }
 
 fn emit_function(function: Function) -> Vec<Fragment> {
-    let Function { name, instructions } = function;
+    let Function {
+        name,
+        instructions,
+        global,
+    } = function;
     let mut text = Vec::new();
 
-    text.push(Fragment::Str("\t.globl "));
-    text.push(Fragment::Str(name));
-    text.push(Fragment::Str("\n"));
+    if global {
+        text.push(Fragment::Str("\t.globl "));
+        text.push(Fragment::Str(name));
+        text.push(Fragment::Str("\n"));
+    }
     text.push(Fragment::Str(name));
     text.push(Fragment::Str(":\n"));
 
@@ -812,10 +862,13 @@ fn emit_function(function: Function) -> Vec<Fragment> {
 
 pub fn emit_program(program: Program) -> Vec<Fragment> {
     let mut text = Vec::new();
-    let Program(functions) = program;
+    let Program(top_level_items) = program;
 
-    for function in functions {
-        text.extend(emit_function(function));
+    for item in top_level_items {
+        match item {
+            TopLevelItem::Function(function) => text.extend(emit_function(function)),
+            TopLevelItem::StaticVar(static_var) => todo!(),
+        }
     }
     text.push(Fragment::Str("\n.section .note.GNU-stack,\"\",@progbits\n"));
 
