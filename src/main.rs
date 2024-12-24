@@ -28,23 +28,23 @@ struct Cli {
 }
 
 impl Cli {
-    fn do_parse(self: &Self) -> bool {
+    fn do_parse(&self) -> bool {
         !self.lex
     }
 
-    fn do_validate(self: &Self) -> bool {
+    fn do_validate(&self) -> bool {
         !self.lex && !self.parse
     }
 
-    fn do_tacky(self: &Self) -> bool {
+    fn do_tacky(&self) -> bool {
         !self.lex && !self.parse && !self.validate
     }
 
-    fn do_codegen(self: &Self) -> bool {
+    fn do_codegen(&self) -> bool {
         !self.lex && !self.parse && !self.validate && !self.tacky
     }
 
-    fn do_emit(self: &Self) -> bool {
+    fn do_emit(&self) -> bool {
         !self.lex && !self.parse && !self.validate && !self.tacky && !self.codegen
     }
 }
@@ -100,8 +100,11 @@ fn main() {
 
                         if args.do_tacky() {
                             let mut tacky_context = tacky::Context::new();
-                            let tacky_program =
-                                tacky::gen_program(parsed_program, &mut tacky_context, &parser_context);
+                            let tacky_program = tacky::gen_program(
+                                parsed_program,
+                                &mut tacky_context,
+                                &parser_context,
+                            );
                             //dbg!(&tacky_program);
 
                             if args.do_codegen() {

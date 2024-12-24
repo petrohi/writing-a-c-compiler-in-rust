@@ -333,7 +333,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                     asm_instructions.push(Instruction::AllocateStack(stack_padding));
                 }
 
-                for (i, arg) in register_args.into_iter().enumerate() {
+                for (i, arg) in register_args.iter().enumerate() {
                     let arg = gen_operand(arg.clone());
 
                     asm_instructions.push(Instruction::Move {
@@ -342,7 +342,7 @@ fn gen_instructions(instructions: Vec<tacky::Instruction>) -> Vec<Instruction> {
                     })
                 }
 
-                for arg in stack_args.into_iter().rev() {
+                for arg in stack_args.iter().rev() {
                     let arg = gen_operand(arg.clone());
 
                     asm_instructions.push(Instruction::Push(arg))

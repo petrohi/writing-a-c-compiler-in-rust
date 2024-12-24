@@ -109,16 +109,16 @@ impl Context {
         }
     }
 
-    fn next_tmp<'a, 'b>(self: &'a mut Self) -> Val<'b> {
+    fn next_tmp<'b>(&mut self) -> Val<'b> {
         let tmp = Val::Tmp(self.last_tmp_index);
         self.last_tmp_index += 1;
         tmp
     }
 
-    fn resolve_parser_var<'a, 'b, 'c>(
-        self: &'a mut Self,
+    fn resolve_parser_var<'b>(
+        &mut self,
         var: &parser::Var<'b>,
-        parser_context: &parser::Context<'c>,
+        parser_context: &parser::Context<'_>,
     ) -> Val<'b> {
         match var {
             parser::Var::NoLinkage(index) => {
@@ -126,22 +126,20 @@ impl Context {
 
                 if parser_context.is_no_linkage_static(var) {
                     Val::NoLinkage(index)
+                } else if let Some(tmp) = self.var_to_tmp.get(&index) {
+                    Val::Tmp(*tmp)
                 } else {
-                    if let Some(tmp) = self.var_to_tmp.get(&index) {
-                        Val::Tmp(*tmp)
-                    } else {
-                        let tmp = self.last_tmp_index;
-                        self.var_to_tmp.insert(index, tmp);
-                        self.last_tmp_index += 1;
-                        Val::Tmp(tmp)
-                    }
+                    let tmp = self.last_tmp_index;
+                    self.var_to_tmp.insert(index, tmp);
+                    self.last_tmp_index += 1;
+                    Val::Tmp(tmp)
                 }
             }
             parser::Var::Linkage(name) => Val::Linkage(name),
         }
     }
 
-    fn resolve_break_label<'a, 'b>(self: &'a mut Self, break_label: &parser::Label) -> Label {
+    fn resolve_break_label(&mut self, break_label: &parser::Label) -> Label {
         let break_label = break_label.0.unwrap();
 
         if let Some(label) = self.break_labels.get(&break_label) {
@@ -154,7 +152,7 @@ impl Context {
         }
     }
 
-    fn resolve_continue_label<'a, 'b>(self: &'a mut Self, continue_label: &parser::Label) -> Label {
+    fn resolve_continue_label(&mut self, continue_label: &parser::Label) -> Label {
         let continue_label = continue_label.0.unwrap();
 
         if let Some(label) = self.continue_labels.get(&continue_label) {
@@ -167,17 +165,17 @@ impl Context {
         }
     }
 
-    fn next_label(self: &mut Self) -> Label {
+    fn next_label(&mut self) -> Label {
         let label = Label(self.last_label_index);
         self.last_label_index += 1;
         label
     }
 }
 
-fn gen_val<'a, 'b, 'c>(
+fn gen_val<'a>(
     expression: parser::Expression<'a>,
-    context: &'b mut Context,
-    parser_context: &'c parser::Context,
+    context: &mut Context,
+    parser_context: &parser::Context,
 ) -> (Val<'a>, Vec<Instruction<'a>>) {
     match expression {
         parser::Expression::Constant(constant) => (Val::Constant(constant), Vec::new()),
@@ -406,10 +404,10 @@ fn gen_val<'a, 'b, 'c>(
     }
 }
 
-fn gen_statement<'a, 'b, 'c>(
+fn gen_statement<'a>(
     statement: parser::Statement<'a>,
-    context: &'b mut Context,
-    parser_context: &'c parser::Context,
+    context: &mut Context,
+    parser_context: &parser::Context,
 ) -> Vec<Instruction<'a>> {
     match statement {
         parser::Statement::Return(expression) => {
@@ -557,10 +555,10 @@ fn gen_statement<'a, 'b, 'c>(
     }
 }
 
-fn gen_variable_declaration<'a, 'b, 'c>(
+fn gen_variable_declaration<'a>(
     declaration: parser::VariableDeclaration<'a>,
-    context: &'b mut Context,
-    parser_context: &'c parser::Context,
+    context: &mut Context,
+    parser_context: &parser::Context,
 ) -> Vec<Instruction<'a>> {
     let parser::VariableDeclaration { var, expression } = declaration;
 
@@ -574,10 +572,10 @@ fn gen_variable_declaration<'a, 'b, 'c>(
     }
 }
 
-fn gen_block<'a, 'b, 'c>(
+fn gen_block<'a>(
     block: parser::Block<'a>,
-    context: &'b mut Context,
-    parser_context: &'c parser::Context,
+    context: &mut Context,
+    parser_context: &parser::Context,
 ) -> Vec<Instruction<'a>> {
     let mut instructions = Vec::new();
 
@@ -587,13 +585,10 @@ fn gen_block<'a, 'b, 'c>(
                 instructions.extend(gen_statement(statement, context, parser_context));
             }
             parser::BlockItem::Declaration(declaration) => match declaration {
-                parser::Declaration::VariableDeclaration(variable_declaration) => instructions
-                    .extend(gen_variable_declaration(
-                        variable_declaration,
-                        context,
-                        parser_context,
-                    )),
-                parser::Declaration::FunctionDeclaration => (),
+                parser::Declaration::Variable(variable_declaration) => instructions.extend(
+                    gen_variable_declaration(variable_declaration, context, parser_context),
+                ),
+                parser::Declaration::Function => (),
                 parser::Declaration::FunctionDefinition(_) => panic!(),
             },
         }
@@ -602,14 +597,14 @@ fn gen_block<'a, 'b, 'c>(
     instructions
 }
 
-fn maybe_gen_function<'a, 'b, 'c>(
+fn maybe_gen_function<'a>(
     declaration: parser::Declaration<'a>,
-    context: &'b mut Context,
-    parser_context: &'c parser::Context,
+    context: &mut Context,
+    parser_context: &parser::Context,
 ) -> Option<Function<'a>> {
     match declaration {
-        parser::Declaration::VariableDeclaration(_) => None,
-        parser::Declaration::FunctionDeclaration => None,
+        parser::Declaration::Variable(_) => None,
+        parser::Declaration::Function => None,
         parser::Declaration::FunctionDefinition(function_definition) => {
             let parser::FunctionDefinition { func, body, params } = function_definition;
             let mut instructions = Vec::new();
@@ -631,10 +626,10 @@ fn maybe_gen_function<'a, 'b, 'c>(
     }
 }
 
-pub fn gen_program<'a, 'b, 'c>(
+pub fn gen_program<'a>(
     program: parser::Program<'a>,
-    context: &'b mut Context,
-    parser_context: &'c parser::Context<'a>,
+    context: &mut Context,
+    parser_context: &parser::Context<'a>,
 ) -> Program<'a> {
     let parser::Program(function_declarations) = program;
     let mut top_level_items = Vec::new();
